@@ -44,3 +44,5 @@ and deploy only reviewed commits from `main`.
 Before a change, read `AGENTS.md`, `CLAUDE.md`, the relevant schema and tests.
 Before review, run `pytest`, `python -m compileall -q app scripts tests`, and
 `docker compose config --quiet` with non-production environment values.
+
+Cloud database and file cutover steps: `docs/CLOUD_CUTOVER.md`.

@@ -14,6 +14,13 @@
 - `docker compose config --quiet`: passed.
 - Local pgvector container healthy on port 5434; schema fixture applied.
 
+## Cloud cutover status
+
+- RDS endpoint `10.140.1.83:5432` is network reachable.
+- Production database credentials and `vector` extension are not verified in
+  this workstation environment.
+- Cloud cutover is blocked until those two checks pass.
+
 ## Acceptance evidence
 
 Record command, commit, result, and environment here after each milestone.
