@@ -1,0 +1,21 @@
+services:
+  # 本地开发用 pgvector 库。正式环境改 .env 的 DATABASE_URL 指向云 RDS，本服务不用。
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: vertu-data-hub-db
+    environment:
+      POSTGRES_USER: datahub
+      POSTGRES_PASSWORD: datahub
+      POSTGRES_DB: vertu_data_hub
+    ports:
+      - "5434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U datahub -d vertu_data_hub"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
