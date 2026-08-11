@@ -7,6 +7,13 @@
 - Git baseline and worktree setup are being established.
 - Functional verification remains required before production use.
 
+## Verification
+
+- `python -m pytest -q`: 12 passed.
+- `python -m compileall -q app scripts tests`: passed.
+- `docker compose config --quiet`: passed.
+- Local pgvector container healthy on port 5434; schema fixture applied.
+
 ## Acceptance evidence
 
 Record command, commit, result, and environment here after each milestone.
