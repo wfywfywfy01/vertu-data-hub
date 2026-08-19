@@ -34,6 +34,20 @@ class Settings:
         "ALLOW_EXTERNAL_IMAGE_PROCESSING", "false"
     ).lower() in {"1", "true", "yes"}
 
+    # 有引用回答。默认禁用外发，显式开启后只发送脱敏 internal 证据。
+    answer_provider: str = _env("ANSWER_PROVIDER", "disabled").lower()
+    allow_external_text_generation: bool = _env(
+        "ALLOW_EXTERNAL_TEXT_GENERATION", "false"
+    ).lower() in {"1", "true", "yes"}
+    openrouter_api_key: str = _env("OPENROUTER_API_KEY")
+    openrouter_base_url: str = _env("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    openrouter_model: str = _env("OPENROUTER_MODEL", "openai/gpt-4.1-mini")
+    openrouter_http_referer: str = _env("OPENROUTER_HTTP_REFERER")
+    openrouter_app_title: str = _env("OPENROUTER_APP_TITLE", "Vertu Dealer Knowledge")
+    answer_min_semantic_similarity: float = float(
+        _env("ANSWER_MIN_SEMANTIC_SIMILARITY", "0.35")
+    )
+
     # 文件类数据源监听根目录
     watched_root: str = _env("WATCHED_ROOT", r"D:\vertu-agent-数据待处理")
 
@@ -99,5 +113,12 @@ def validate_production_settings(value: Settings = settings) -> None:
             errors.append("external image processing requires the image embedding API")
     elif value.image_embedding_provider != "hash":
         errors.append("IMAGE_EMBEDDING_PROVIDER must be hash when external image processing is disabled")
+    if getattr(value, "allow_external_text_generation", False):
+        if getattr(value, "answer_provider", "disabled") != "openrouter":
+            errors.append("external text generation requires ANSWER_PROVIDER=openrouter")
+        if not getattr(value, "openrouter_api_key", ""):
+            errors.append("OPENROUTER_API_KEY is required for external text generation")
+        if not getattr(value, "openrouter_model", ""):
+            errors.append("OPENROUTER_MODEL is required for external text generation")
     if errors:
         raise RuntimeError("invalid production configuration: " + "; ".join(errors))

@@ -8,6 +8,11 @@ from pydantic import BaseModel, Field
 
 from app.api.auth import ServiceClaims, require_service_claims
 from app.api.errors import ApiError
+from app.answers.service import (
+    AnswerUnavailableError,
+    InvalidModelAnswerError,
+    answer_question,
+)
 from app.config import settings
 from app.knowledge import assets, dealers
 from app.queue import enqueue_processing_job
@@ -64,6 +69,10 @@ class SearchRequest(BaseModel):
     dealer_id: UUID | None = None
     category: str | None = Field(default=None, max_length=40)
     top_k: int = Field(default=5, ge=1, le=20)
+
+
+class AnswerRequest(SearchRequest):
+    top_k: int = Field(default=5, ge=1, le=10)
 
 
 @router.get("/dealers")
@@ -254,3 +263,31 @@ async def search(
     except Exception as exc:
         raise ApiError(503, "search_unavailable", "Knowledge search is unavailable") from exc
     return {"items": rows, "count": len(rows)}
+
+
+@router.post("/answers")
+async def answer(
+    body: AnswerRequest,
+    request: Request,
+    claims: ServiceClaims = Depends(require_service_claims),
+):
+    if body.dealer_id:
+        claims.require_dealer(body.dealer_id)
+    if body.category and body.category not in assets.CATEGORIES:
+        raise ApiError(422, "invalid_answer", "Unsupported asset category")
+    try:
+        return await answer_question(
+            body.query,
+            dealer_ids=None if claims.unrestricted else list(claims.dealer_ids),
+            actor_id=claims.user_id,
+            request_id=request.state.request_id,
+            dealer_id=body.dealer_id,
+            category=body.category,
+            top_k=body.top_k,
+        )
+    except ValueError as exc:
+        raise ApiError(422, "invalid_answer", str(exc))
+    except (AnswerUnavailableError, InvalidModelAnswerError) as exc:
+        raise ApiError(503, "answer_unavailable", "Answer generation is unavailable") from exc
+    except Exception as exc:
+        raise ApiError(503, "answer_unavailable", "Answer generation is unavailable") from exc

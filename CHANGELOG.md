@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added evidence-gated OpenRouter answers with validated citations, sensitivity blocking, output redaction, and hash-only audits.
 - Added dealer-scoped hybrid full-text/vector search with RRF, cited redacted results, and hash-only query auditing.
 - Added local multilingual image OCR, scanned-PDF fallback, HEIC support, image vectors, retrieval-layer redaction, and fail-closed external image processing.
 - Added document workers for verified OSS download, Docling/PDFium extraction, cited chunks, embeddings, derived Markdown, and retry-aware job status.

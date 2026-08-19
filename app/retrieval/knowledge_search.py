@@ -28,6 +28,7 @@ BASE_SELECT = """
         a.id AS asset_id,
         a.title,
         a.category,
+        a.sensitivity,
         v.version_number,
         s.original_name
 """
@@ -108,6 +109,7 @@ def _fuse(vector_hits: list[dict], text_hits: list[dict], top_k: int) -> list[di
                 "text": safe_text,
                 "section": safe_section,
                 "category": item["category"],
+                "sensitivity": item["sensitivity"],
                 "score": item["score"],
                 "semantic_similarity": item["semantic_similarity"],
                 "lexical_score": item["lexical_score"],

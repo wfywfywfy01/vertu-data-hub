@@ -1,5 +1,20 @@
 # Progress
 
+## 2026-08-19：里程碑 4B 有引用回答
+
+- 实现 `POST /v1/answers`，复用经销商权限内混合检索和引用。
+- OpenRouter 使用严格 JSON Schema 输出；模型引用索引必须映射到实际证据。
+- 无可靠证据时拒答；`confidential/restricted` 证据禁止发送外部模型。
+- 查询、证据和最终回答执行脱敏；OpenRouter 地址限制为官方 HTTPS API。
+- 追加 `knowledge.answer` 哈希审计，记录状态、模型、Token 用量和引用资产，不保存原始问答。
+- OpenRouter 真实 API 冒烟取决于部署环境密钥；50 问业务 RAG 回归集尚未建立。
+
+### 验证
+
+- `python -m pytest -q`：65 passed。
+- 真实 PostgreSQL/pgvector：空权限拒答、越权 403、哈希审计通过。
+- OpenRouter MockTransport：官方端点、严格结构化输出、引用映射和 Token 用量过滤通过。
+
 ## 2026-08-19：里程碑 4A 权限内混合检索
 
 - 实现 `POST /v1/search`，支持 query、经销商、类别和 Top-K 过滤。

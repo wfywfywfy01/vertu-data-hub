@@ -39,6 +39,7 @@ def test_rrf_rewards_chunk_found_by_both_retrievers():
         "text": "shared",
         "section": None,
         "category": "sales_inventory",
+        "sensitivity": "internal",
         "citation": {},
         "version_number": 1,
         "title": "Inventory",

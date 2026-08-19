@@ -34,6 +34,31 @@
 资产 ID、版本 ID/编号和页码。审计只保存查询 SHA-256、命中数和资产 ID，不保存
 原始查询。
 
+### 有引用回答
+
+`POST /v1/answers` 接受与检索相同的 `query`、可选 `dealer_id`、可选 `category`
+和 `top_k`（1-10）。服务先执行权限内混合检索，再按以下规则处理：
+
+- 无足够词法或语义证据：返回 `insufficient_evidence` 和“无可靠证据”，不调用模型。
+- 任一候选证据为 `confidential/restricted`：返回 `sensitive_evidence_blocked`，不调用外部模型。
+- 只把已脱敏查询和 `internal` 证据发送给 OpenRouter；API 地址固定为官方 HTTPS 地址。
+- 模型必须返回严格 JSON 和一基引用索引；索引越界时整次回答失败。
+- 最终回答再次脱敏，只返回模型实际引用且已校验的资产、版本、文件和页码。
+- `knowledge.answer` 审计只保存查询 SHA-256、状态、模型、Token 用量和引用资产 ID。
+
+成功响应示例：
+
+```json
+{
+  "status": "answered",
+  "answer": "Safiran Hamrah 当前库存为 12 台。",
+  "citations": [{"asset_id": "...", "title": "库存周报", "page_start": 2}],
+  "model": "openai/gpt-4.1-mini",
+  "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
+  "evidence_count": 3
+}
+```
+
 ## 权限
 
 | 角色 | 默认范围 | 能力 |

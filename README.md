@@ -43,8 +43,21 @@ Russian OCR 模型应在联网构建环境预热后再部署到离线生产 work
 {"query":"Safiran Hamrah 当前库存", "dealer_id":"<dealer-uuid>", "top_k":5}
 ```
 
-响应返回脱敏片段、RRF 分数和包含资产、版本、文件名、页码的引用。当前尚不生成
-自然语言答案；回答服务将在检索回归集稳定后接入。
+响应返回脱敏片段、RRF 分数和包含资产、版本、文件名、页码的引用。
+
+`POST /v1/answers` 在同一权限范围内检索并生成有引用回答。默认关闭外部模型；启用
+OpenRouter 时设置：
+
+```dotenv
+ANSWER_PROVIDER=openrouter
+ALLOW_EXTERNAL_TEXT_GENERATION=true
+OPENROUTER_API_KEY=<secret>
+OPENROUTER_MODEL=openai/gpt-4.1-mini
+```
+
+服务只向 OpenRouter 官方 HTTPS API 发送脱敏查询和 `internal` 证据。无足够证据时
+返回“无可靠证据”；命中 `confidential/restricted` 资料时不调用外部模型。模型引用
+索引必须对应实际检索证据，否则整次回答失败。查询审计只保存 SHA-256。
 
 ## 新增一个数据源
 

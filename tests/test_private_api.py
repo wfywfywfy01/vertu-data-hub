@@ -437,3 +437,39 @@ async def test_search_with_empty_scope_returns_no_results(client, search_records
 
     assert response.status_code == 200
     assert response.json() == {"items": [], "count": 0}
+
+
+async def test_answer_with_empty_scope_refuses_without_calling_model(client, search_records):
+    request_id = f"pytest-answer-{uuid.uuid4()}"
+    query = "inventory"
+    response = await client.post(
+        "/v1/answers",
+        headers={
+            "Authorization": f"Bearer {_token()}",
+            "X-Request-ID": request_id,
+        },
+        json={"query": query},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "insufficient_evidence"
+    assert response.json()["citations"] == []
+    audit = await db.fetch_one(
+        "SELECT payload FROM audit_event WHERE request_id = %s "
+        "AND action = 'knowledge.answer'",
+        (request_id,),
+    )
+    assert audit["payload"]["query_sha256"] == hashlib.sha256(query.encode()).hexdigest()
+    assert query not in str(audit["payload"])
+
+
+async def test_answer_rejects_explicit_dealer_outside_scope(client, search_records):
+    allowed, hidden = search_records
+    response = await client.post(
+        "/v1/answers",
+        headers={"Authorization": f"Bearer {_token(dealer_ids=[allowed[0]['id']])}"},
+        json={"query": "inventory", "dealer_id": str(hidden[0]["id"])},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "dealer_scope_denied"
