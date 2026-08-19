@@ -37,6 +37,15 @@ CSV/TXT/Markdown 文档解析、分块、向量化和页码引用。图片与扫
 调用云图片 embedding；`confidential/restricted` 始终本地处理。Arabic/Persian 和
 Russian OCR 模型应在联网构建环境预热后再部署到离线生产 worker。
 
+`POST /v1/search` 已提供经销商权限内的全文 + 向量混合检索。请求体示例：
+
+```json
+{"query":"Safiran Hamrah 当前库存", "dealer_id":"<dealer-uuid>", "top_k":5}
+```
+
+响应返回脱敏片段、RRF 分数和包含资产、版本、文件名、页码的引用。当前尚不生成
+自然语言答案；回答服务将在检索回归集稳定后接入。
+
 ## 新增一个数据源
 
 1. 在 `app/cli/register_source.py` 的 `SOURCES` 列表加一项（或写一次性脚本调用

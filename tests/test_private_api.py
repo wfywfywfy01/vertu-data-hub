@@ -1,12 +1,15 @@
 from datetime import datetime, timedelta, timezone
+import hashlib
 import uuid
 
 import httpx
 import jwt
 import pytest
+from psycopg.types.json import Jsonb
 
 from app import db
 from app.api.main import app
+from app.embeddings.text import HashTextEmbedder, vector_literal
 from app.knowledge import assets, dealers
 from app.storage import ObjectMetadata
 
@@ -308,3 +311,129 @@ async def test_dispatch_failure_is_persisted_and_same_request_can_retry(client, 
         (retried.json()["asset"]["id"],),
     )
     assert count["n"] == 1
+
+
+async def _search_record(name: str, text: str, category: str = "sales_inventory"):
+    dealer = await dealers.propose_dealer(
+        official_name=f"{name} {uuid.uuid4().hex[:8]}",
+        country_code="IR",
+        proposed_by="pytest-sales",
+    )
+    source = text.encode()
+    registered = await assets.register_asset_version(
+        dealer_id=dealer["id"],
+        logical_key=f"search-{uuid.uuid4()}",
+        title=f"{name} Inventory",
+        category=category,
+        sensitivity="internal",
+        bucket="pytest-private",
+        object_key=f"development/dealers/{dealer['id']}/original/search.md",
+        content_hash=hashlib.sha256(source).hexdigest(),
+        original_name="inventory.md",
+        content_type="text/markdown",
+        byte_size=len(source),
+        actor_id="pytest-sales",
+        idempotency_key=f"pytest-{uuid.uuid4()}",
+        language_code="en",
+    )
+    await assets.transition_job(registered["job"]["id"], "running")
+    await assets.transition_job(registered["job"]["id"], "succeeded")
+    vector = (await HashTextEmbedder(1024).embed([text]))[0]
+    await db.execute(
+        """
+        INSERT INTO content_chunk
+            (dealer_id, asset_version_id, chunk_index, text, section,
+             page_start, page_end, language_code, citation, embedding,
+             embedding_provider, embedding_model, embedding_dimension, pipeline_version)
+        VALUES (%s, %s, 0, %s, 'Inventory', 2, 2, 'en', %s, %s::vector,
+                'hash', 'hash-ngram-v1', 1024, 'pytest-search-v1')
+        """,
+        (
+            dealer["id"],
+            registered["version"]["id"],
+            text,
+            Jsonb({"source": "document", "page_start": 2, "page_end": 2}),
+            vector_literal(vector),
+        ),
+    )
+    return dealer, registered
+
+
+@pytest.fixture
+async def search_records():
+    allowed = await _search_record(
+        "Safiran Hamrah",
+        "Safiran Hamrah weekly inventory contains 12 Signature phones. "
+        "Contact frank.fu@vertu.cn.",
+    )
+    hidden = await _search_record(
+        "Hidden Dealer",
+        "Hidden dealer inventory contains confidential competitor pricing.",
+    )
+    yield allowed, hidden
+    dealer_ids = [allowed[0]["id"], hidden[0]["id"]]
+    await db.execute("DELETE FROM content_chunk WHERE dealer_id = ANY(%s)", (dealer_ids,))
+    await db.execute("DELETE FROM processing_job WHERE dealer_id = ANY(%s)", (dealer_ids,))
+    await db.execute(
+        "DELETE FROM asset_version WHERE asset_id IN "
+        "(SELECT id FROM knowledge_asset WHERE dealer_id = ANY(%s))",
+        (dealer_ids,),
+    )
+    await db.execute("DELETE FROM knowledge_asset WHERE dealer_id = ANY(%s)", (dealer_ids,))
+    await db.execute("DELETE FROM source_object WHERE dealer_id = ANY(%s)", (dealer_ids,))
+    await db.execute("DELETE FROM dealer_alias WHERE dealer_id = ANY(%s)", (dealer_ids,))
+    await db.execute("DELETE FROM dealer WHERE id = ANY(%s)", (dealer_ids,))
+
+
+async def test_search_returns_scoped_cited_results_and_hash_only_audit(client, search_records):
+    allowed, hidden = search_records
+    request_id = f"pytest-search-{uuid.uuid4()}"
+    query = "Safiran Hamrah inventory"
+    response = await client.post(
+        "/v1/search",
+        headers={
+            "Authorization": f"Bearer {_token(dealer_ids=[allowed[0]['id']])}",
+            "X-Request-ID": request_id,
+        },
+        json={"query": query, "top_k": 5},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["count"] == 1
+    assert body["items"][0]["dealer_id"] == str(allowed[0]["id"])
+    assert body["items"][0]["dealer_id"] != str(hidden[0]["id"])
+    assert body["items"][0]["lexical_score"] is not None
+    assert "frank.fu" not in body["items"][0]["text"]
+    assert "[REDACTED_EMAIL]" in body["items"][0]["text"]
+    assert body["items"][0]["citation"]["page_start"] == 2
+    assert body["items"][0]["citation"]["original_name"] == "inventory.md"
+    audit = await db.fetch_one(
+        "SELECT payload FROM audit_event WHERE request_id = %s AND action = 'knowledge.search'",
+        (request_id,),
+    )
+    assert audit["payload"]["query_sha256"] == hashlib.sha256(query.encode()).hexdigest()
+    assert query not in str(audit["payload"])
+
+
+async def test_search_rejects_explicit_dealer_outside_scope(client, search_records):
+    allowed, hidden = search_records
+    response = await client.post(
+        "/v1/search",
+        headers={"Authorization": f"Bearer {_token(dealer_ids=[allowed[0]['id']])}"},
+        json={"query": "inventory", "dealer_id": str(hidden[0]["id"])},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "dealer_scope_denied"
+
+
+async def test_search_with_empty_scope_returns_no_results(client, search_records):
+    response = await client.post(
+        "/v1/search",
+        headers={"Authorization": f"Bearer {_token()}"},
+        json={"query": "inventory"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"items": [], "count": 0}

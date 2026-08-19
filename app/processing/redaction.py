@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import re
 
 
-EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+(?![\w.-])", re.UNICODE)
+EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+(?![\w-])", re.UNICODE)
 PHONE_CANDIDATE = re.compile(r"(?<!\w)\+?\d(?:[\d\s().-]{5,}\d)(?!\w)", re.UNICODE)
 
 

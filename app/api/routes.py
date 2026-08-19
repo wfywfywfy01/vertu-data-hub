@@ -11,6 +11,7 @@ from app.api.errors import ApiError
 from app.config import settings
 from app.knowledge import assets, dealers
 from app.queue import enqueue_processing_job
+from app.retrieval.knowledge_search import search_knowledge
 from app.storage import (
     ObjectNotFoundError,
     build_original_key,
@@ -56,6 +57,13 @@ class CompleteRequest(BaseModel):
     byte_size: int = Field(gt=0)
     store_id: UUID | None = None
     language_code: str | None = Field(default=None, max_length=16)
+
+
+class SearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=500)
+    dealer_id: UUID | None = None
+    category: str | None = Field(default=None, max_length=40)
+    top_k: int = Field(default=5, ge=1, le=20)
 
 
 @router.get("/dealers")
@@ -219,3 +227,30 @@ async def get_job(job_id: UUID, claims: ServiceClaims = Depends(require_service_
     if not row:
         raise ApiError(404, "job_not_found", "Job was not found")
     return row
+
+
+@router.post("/search")
+async def search(
+    body: SearchRequest,
+    request: Request,
+    claims: ServiceClaims = Depends(require_service_claims),
+):
+    if body.dealer_id:
+        claims.require_dealer(body.dealer_id)
+    if body.category and body.category not in assets.CATEGORIES:
+        raise ApiError(422, "invalid_search", "Unsupported asset category")
+    try:
+        rows = await search_knowledge(
+            body.query,
+            dealer_ids=None if claims.unrestricted else list(claims.dealer_ids),
+            actor_id=claims.user_id,
+            request_id=request.state.request_id,
+            dealer_id=body.dealer_id,
+            category=body.category,
+            top_k=body.top_k,
+        )
+    except ValueError as exc:
+        raise ApiError(422, "invalid_search", str(exc))
+    except Exception as exc:
+        raise ApiError(503, "search_unavailable", "Knowledge search is unavailable") from exc
+    return {"items": rows, "count": len(rows)}

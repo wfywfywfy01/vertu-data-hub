@@ -11,3 +11,9 @@ def test_redacts_email_and_international_phone_in_latin_and_persian_digits():
     assert "912 123" not in result.text
     assert "۱۲۳" not in result.text
     assert "2026" in result.text
+
+
+def test_redacts_email_at_sentence_end():
+    result = redact_text("Contact frank.fu@vertu.cn.")
+
+    assert result.text == "Contact [REDACTED_EMAIL]."
