@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added document workers for verified OSS download, Docling/PDFium extraction, cited chunks, embeddings, derived Markdown, and retry-aware job status.
 - Added the private FastAPI service, short-lived PDCA JWT authorization, OSS direct-upload verification, and Celery routing with durable dispatch status.
 - Added a psycopg-compatible Windows API launcher and Redis Compose service.
 - Added dealer master records, multilingual alias search, explicit ownership, immutable asset versions, processing jobs, and append-only audit events.

@@ -1,5 +1,23 @@
 # Progress
 
+## 2026-08-19：里程碑 3A 文档处理 worker
+
+- 实现源文件下载、大小与 SHA-256 完整性校验、派生 Markdown 上传。
+- 实现 PDF/DOCX/PPTX/XLSX/CSV/TXT/Markdown 解析、分块、向量化和页码引用。
+- PostgreSQL 保存派生物、内容分块、embedding 身份和处理流水线版本。
+- 实现 Celery 文档任务、最多 3 次尝试、永久错误与可重试错误分类。
+- PDF 在 Docling 不可用时回退到 PDFium 按页提取数字文本。
+- 图片、音视频和扫描件 OCR 仍未实现。
+
+### 验证
+
+- `python -m pytest -q`：38 passed。
+- PDF 实文件：19 chunks、18,821 chars、页码引用通过。
+- DOCX/XLSX 实文件：解析通过。
+- `python -m compileall -q app scripts tests`：通过。
+- `python scripts/init_db.py` 连续执行两次：通过。
+- `docker compose config --quiet`：通过。
+
 ## 2026-08-19：里程碑 2B 私有 API 与任务路由
 
 - 实现最长 5 分钟的 PDCA HS256 服务令牌校验、角色校验和经销商范围二次授权。

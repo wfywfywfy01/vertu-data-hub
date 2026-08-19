@@ -294,6 +294,7 @@ async def transition_job(
     progress: int | None = None,
     error_code: str | None = None,
     error_message: str | None = None,
+    output_data: dict | None = None,
 ) -> dict:
     if status not in TRANSITIONS:
         raise ValueError("unknown job status")
@@ -317,11 +318,16 @@ async def transition_job(
                     error_code = %s, error_message = %s,
                     started_at = CASE WHEN %s = 'running' THEN coalesce(started_at, now()) ELSE started_at END,
                     finished_at = CASE WHEN %s IN ('succeeded','failed') THEN now() ELSE NULL END,
+                    output_data = coalesce(%s::jsonb, output_data),
                     updated_at = now()
                 WHERE id = %s
                 RETURNING *
                 """,
-                (status, next_progress, status, error_code, error_message, status, status, job_id),
+                (
+                    status, next_progress, status, error_code, error_message, status, status,
+                    Jsonb(output_data) if output_data is not None else None,
+                    job_id,
+                ),
             )
             updated = await cur.fetchone()
             asset_status = {"running": "processing", "succeeded": "searchable", "failed": "failed"}.get(status)
@@ -341,6 +347,34 @@ async def transition_job(
                 {"from": job["status"], "to": status, "progress": next_progress},
             )
             return updated
+
+
+async def get_job_context(job_id: UUID | str) -> dict | None:
+    return await db.fetch_one(
+        """
+        SELECT
+            j.*,
+            v.asset_id,
+            v.language_code,
+            v.version_number,
+            v.source_object_id,
+            a.title AS asset_title,
+            a.category,
+            a.sensitivity,
+            s.bucket,
+            s.object_key,
+            s.content_hash,
+            s.original_name,
+            s.content_type,
+            s.byte_size
+        FROM processing_job j
+        JOIN asset_version v ON v.id = j.asset_version_id
+        JOIN knowledge_asset a ON a.id = v.asset_id
+        JOIN source_object s ON s.id = v.source_object_id
+        WHERE j.id = %s
+        """,
+        (job_id,),
+    )
 
 
 async def _job_bundle(conn, idempotency_key: str) -> dict | None:

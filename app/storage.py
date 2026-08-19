@@ -81,6 +81,13 @@ def validate_original_key(dealer_id, object_key: str) -> str:
     return key
 
 
+def build_derived_key(dealer_id, asset_version_id, filename: str) -> str:
+    name = PurePosixPath(str(filename).replace("\\", "/")).name
+    if not name or name in {".", ".."}:
+        raise ValueError("invalid derived filename")
+    return f"{settings.app_env}/dealers/{dealer_id}/derived/{asset_version_id}/{name}"
+
+
 class OssStorage:
     def __init__(self):
         import oss2
@@ -110,6 +117,12 @@ class OssStorage:
             content_type=str(result.content_type or "").split(";", 1)[0].lower(),
             content_hash=str(headers.get("x-oss-meta-sha256", "")).lower(),
         )
+
+    def download_to_file(self, key: str, target) -> None:
+        self.bucket.get_object_to_file(key, str(target))
+
+    def put_object(self, key: str, data: bytes, *, content_type: str) -> None:
+        self.bucket.put_object(key, data, headers={"Content-Type": content_type})
 
 
 def get_storage() -> OssStorage:

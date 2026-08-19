@@ -15,6 +15,7 @@ python scripts/init_db.py                # 建表（幂等）
 python -m app.cli.register_source        # 注册初始数据源（幂等）
 python -m app.cli.sync --all             # 跑一遍同步
 python run_api.py                         # 私有 API（默认 127.0.0.1:8080）
+celery -A app.queue:celery_app worker -Q documents --pool=solo  # Windows 文档 worker
 ```
 
 API 需要 PDCA 服务令牌密钥。开发环境在 `.env` 设置至少 32 字节的
@@ -25,7 +26,9 @@ docker compose up -d redis
 ```
 
 开发环境接口文档：`http://127.0.0.1:8080/docs`。当前已支持经销商主表、OSS
-签名直传、上传完成校验、资产版本和 Celery 路由；多模态 worker 尚未交付。
+签名直传、上传完成校验、资产版本、Celery 路由，以及 PDF/DOCX/PPTX/XLSX/
+CSV/TXT/Markdown 文档解析、分块、向量化和页码引用。图片、音视频和扫描件 OCR
+worker 尚未交付。
 
 ## 新增一个数据源
 

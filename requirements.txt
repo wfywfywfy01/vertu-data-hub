@@ -6,6 +6,7 @@ oss2>=2.18
 openpyxl>=3.1
 Pillow>=10.0
 docling>=2.0
+pypdfium2>=5.12
 httpx>=0.27
 pydantic>=2.6
 pytest>=8.0

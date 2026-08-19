@@ -156,6 +156,48 @@ ALTER TABLE processing_job
 CREATE INDEX IF NOT EXISTS idx_processing_job_dispatch
     ON processing_job (dispatch_status, created_at) WHERE status = 'queued';
 
+CREATE TABLE IF NOT EXISTS derived_artifact (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    dealer_id        UUID NOT NULL REFERENCES dealer(id),
+    asset_version_id UUID NOT NULL REFERENCES asset_version(id),
+    artifact_type    VARCHAR(40) NOT NULL,
+    bucket           VARCHAR(120) NOT NULL,
+    object_key       VARCHAR(900) NOT NULL,
+    content_hash     VARCHAR(64) NOT NULL CHECK (content_hash ~ '^[0-9a-f]{64}$'),
+    content_type     VARCHAR(160) NOT NULL,
+    byte_size        BIGINT NOT NULL CHECK (byte_size > 0),
+    pipeline_version VARCHAR(80) NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (asset_version_id, artifact_type, pipeline_version),
+    UNIQUE (bucket, object_key)
+);
+
+CREATE TABLE IF NOT EXISTS content_chunk (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    dealer_id           UUID NOT NULL REFERENCES dealer(id),
+    asset_version_id    UUID NOT NULL REFERENCES asset_version(id),
+    chunk_index         INTEGER NOT NULL CHECK (chunk_index >= 0),
+    text                TEXT NOT NULL,
+    section             VARCHAR(300),
+    page_start          INTEGER CHECK (page_start IS NULL OR page_start > 0),
+    page_end            INTEGER CHECK (page_end IS NULL OR page_end >= page_start),
+    language_code       VARCHAR(16),
+    citation            JSONB NOT NULL DEFAULT '{}',
+    embedding           vector(1024) NOT NULL,
+    embedding_provider  VARCHAR(40) NOT NULL,
+    embedding_model     VARCHAR(120) NOT NULL,
+    embedding_dimension INTEGER NOT NULL CHECK (embedding_dimension > 0),
+    pipeline_version    VARCHAR(80) NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (asset_version_id, chunk_index)
+);
+CREATE INDEX IF NOT EXISTS idx_content_chunk_dealer
+    ON content_chunk (dealer_id, asset_version_id, chunk_index);
+CREATE INDEX IF NOT EXISTS idx_content_chunk_embedding
+    ON content_chunk USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX IF NOT EXISTS idx_content_chunk_text
+    ON content_chunk USING gin (to_tsvector('simple', text));
+
 CREATE TABLE IF NOT EXISTS audit_event (
     id          BIGSERIAL PRIMARY KEY,
     actor_id    VARCHAR(160) NOT NULL,
