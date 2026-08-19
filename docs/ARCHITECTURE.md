@@ -1,34 +1,47 @@
-# Architecture
+# 经销商知识库架构
 
-## Project boundary
+## 系统边界
 
-Vertu Store Agent is one business project with two repositories:
-
-- `vertu-data-hub`: data ingestion, catalog, chunking, embeddings, and retrieval.
-- `vertu-store-agent`: store collection forms, ETL, agent APIs, and presentation.
-
-The repositories remain independently deployable. The shared contract is the
-database schema, source metadata, and documented retrieval behavior. No direct
-import from one repository into the other.
-
-## Data flow
+`dealer-knowledge-hub` 是经销商资料的权威数据与检索服务。它负责经销商主表、文件目录、版本、异步处理、脱敏、混合检索、引用和审计，不负责用户登录或 PDCA 业务流程。
 
 ```text
-files / skills / databases
-        |
-        v
- connectors -> catalog -> ingestion -> PostgreSQL + pgvector
-                                      |
-                                      v
-                              read-only retrieval
+浏览器
+  |
+  v
+PDCA 工作台（登录、权限、页面、流程）
+  |
+  | 私网 HTTPS + 短期签名服务令牌
+  v
+经销商知识库 API
+  |---------------- PostgreSQL + pgvector（业务真相）
+  |---------------- 私有 OSS（原件与派生物）
+  |---------------- Redis/Celery（任务传递）
+  `---------------- 模型网关（受控片段）
 ```
 
-Structured data uses relational or JSONB storage. Text and image similarity use
-pgvector. Every ingested record keeps source identity, metadata, and a stable
-content hash so repeated syncs remain idempotent.
+PDCA 和知识库可部署在同一云环境，但使用独立数据库、账号和发布流水线。知识库不接受浏览器直连，也不允许 PDCA 跨库读取知识表。
 
-## Production boundary
+## 数据流
 
-The data hub does not expose a user-facing agent API. It supplies storage and
-retrieval capabilities to the companion application through the database
-contract and approved read paths.
+1. 用户在 PDCA 选择经销商并上传，或管理员把批量资料写入 OSS inbox。
+2. 知识库登记源对象、计算哈希并创建处理任务。
+3. 系统识别格式、经销商、类别和敏感级别；高风险或低置信度内容进入待确认。
+4. worker 生成文本、OCR、表格、图片描述、关键帧、转写、摘要和向量。
+5. 通过校验的资产版本进入可检索状态；原始版本和处理证据保留。
+6. 查询同时执行结构化过滤、全文检索和向量检索，再生成带页码或时间戳的答案。
+
+## 强制不变量
+
+- 每项资产必须属于一个经销商；无法判断的文件只能进入隔离区。
+- 原始对象和资产版本不可覆盖。
+- 所有检索条件必须包含服务端计算的经销商范围。
+- 所有 AI 和普通预览默认脱敏；AI 永不输出未脱敏数据。
+- 未脱敏导出仅限管理员，必须重新认证、记录原因、加水印并生成短期链接。
+- PostgreSQL 是主表、资产、任务和审计的权威来源；OSS 路径和 Redis 消息都不是业务真相。
+- 每个答案必须有引用；证据不足时明确返回“无可靠证据”。
+
+## 运行环境
+
+开发、预发布、生产使用不同数据库、Redis 命名空间和 OSS 写前缀。生产只部署 `main` 上通过检查的明确 commit 和镜像 digest。
+
+详细边界见 `docs/ADR/`，接口见 `docs/API_CONTRACT.md`，数据模型见 `docs/DATA_MODEL.md`。

@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-08-19：企业知识库架构基线
+
+- 确认 PDCA 与知识库使用私有 API 边界和独立数据库账号。
+- 建立经销商主表、资产版本、异步任务、权限、脱敏和审计目标模型。
+- 固化私有 OSS 前缀、Redis/Celery 职责、API 契约和五阶段实施计划。
+- 当前仅完成架构基线；新数据模型、API、worker 和 PDCA 页面尚未实现，不得标记为生产可用。
+
 ## 2026-08-19
 
 - Added private OSS inbox mirroring for documents, images, sales files, and the
