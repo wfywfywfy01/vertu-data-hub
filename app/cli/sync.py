@@ -12,11 +12,11 @@ from app.catalog import registry
 from app.connectors.registry import CONNECTOR_REGISTRY
 
 
-async def sync_one(source: dict) -> None:
+async def sync_one(source: dict) -> bool:
     connector_cls = CONNECTOR_REGISTRY.get(source["source_type"])
     if connector_cls is None:
         print(f"[{source['code']}] skip: unknown source_type {source['source_type']}")
-        return
+        return False
 
     run = await registry.start_run(source["id"])
     try:
@@ -25,14 +25,17 @@ async def sync_one(source: dict) -> None:
         await registry.finish_run(
             run["id"], status, result.items_processed, "; ".join(result.errors) or None
         )
-        await registry.mark_synced(source["id"])
+        if status == "success":
+            await registry.mark_synced(source["id"])
         print(
             f"[{source['code']}] {status}: {result.items_processed} item(s) processed"
             + (f", errors: {result.errors}" if result.errors else "")
         )
+        return status == "success"
     except Exception as exc:
         await registry.finish_run(run["id"], "failed", 0, str(exc))
         print(f"[{source['code']}] failed: {exc}")
+        return False
 
 
 async def main() -> None:
@@ -41,21 +44,24 @@ async def main() -> None:
     parser.add_argument("--source", help="sync a single data source by code")
     args = parser.parse_args()
 
+    outcomes = []
     if args.source:
         source = await registry.get_data_source(args.source)
         if not source:
             raise SystemExit(f"no such data_source: {args.source}")
-        await sync_one(source)
+        outcomes.append(await sync_one(source))
     elif args.all:
         sources = await registry.list_data_sources(enabled_only=True)
         if not sources:
             print("no enabled data sources found — run `python -m app.cli.register_source` first")
         for source in sources:
-            await sync_one(source)
+            outcomes.append(await sync_one(source))
     else:
         raise SystemExit("pass --all or --source <code>")
 
     await db.close_pool()
+    if not all(outcomes):
+        raise SystemExit("one or more data sources failed")
 
 
 if __name__ == "__main__":

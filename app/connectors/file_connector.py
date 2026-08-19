@@ -43,35 +43,38 @@ class FileConnector:
             return await self._log_only(source, root, result)
 
         suffixes = SUFFIXES_BY_HANDLER[handler]
-        files = [p for p in sorted(root.iterdir()) if p.is_file() and p.suffix.lower() in suffixes]
+        files = [p for p in sorted(root.rglob("*")) if p.is_file() and p.suffix.lower() in suffixes]
 
         for path in files:
-            external_key = path.name
+            external_key = path.relative_to(root).as_posix()
             data = path.read_bytes()
             new_hash = registry.content_hash(data)
             existing = await registry.get_source_item(source["id"], external_key)
             if existing and existing["content_hash"] == new_hash and existing["status"] == "ingested":
                 continue  # 未变化，跳过
 
+            item = await registry.upsert_source_item(
+                source["id"], external_key, new_hash, status="processing"
+            )
             try:
                 if handler == "doc_rag":
-                    await self._ingest_doc(path, source, config)
+                    await self._ingest_doc(path, source, config, item, external_key)
                 elif handler == "image":
-                    await self._ingest_image(data, path, source, config)
+                    await self._ingest_image(data, path, source, config, item, external_key)
                 elif handler == "tabular":
-                    await self._ingest_tabular(path, source, config)
+                    await self._ingest_tabular(path, source, config, item, external_key)
                 await registry.upsert_source_item(source["id"], external_key, new_hash, status="ingested")
                 result.items_processed += 1
             except Exception as exc:  # 单个文件失败不影响其他文件
                 await registry.upsert_source_item(
                     source["id"], external_key, new_hash, status="failed", error=str(exc)
                 )
-                result.errors.append(f"{path.name}: {exc}")
+                result.errors.append(f"{external_key}: {exc}")
 
         return result
 
     async def _log_only(self, source: dict, root: Path, result: SyncResult) -> SyncResult:
-        files = [p.name for p in sorted(root.iterdir()) if p.is_file()]
+        files = [p.relative_to(root).as_posix() for p in sorted(root.rglob("*")) if p.is_file()]
         if files:
             logger.info(
                 "data_source=%s 发现 %d 个待人工分类文件: %s",
@@ -80,18 +83,22 @@ class FileConnector:
         result.items_processed = 0
         return result
 
-    async def _ingest_doc(self, path: Path, source: dict, config: dict) -> None:
+    async def _ingest_doc(
+        self, path: Path, source: dict, config: dict, item: dict, external_key: str
+    ) -> None:
         from app.ingestion.doc_ingest import ingest_file
 
-        item = await registry.get_source_item(source["id"], path.name)
         await ingest_file(
             path,
             data_source_id=source["id"],
-            source_item_id=item["id"] if item else None,
+            source_item_id=item["id"],
             tags=config.get("default_tags", {}),
+            source_file=external_key,
         )
 
-    async def _ingest_image(self, data: bytes, path: Path, source: dict, config: dict) -> None:
+    async def _ingest_image(
+        self, data: bytes, path: Path, source: dict, config: dict, item: dict, external_key: str
+    ) -> None:
         from psycopg.types.json import Jsonb
 
         from app.embeddings.image import get_image_embedder
@@ -99,21 +106,24 @@ class FileConnector:
 
         vec = await get_image_embedder().embed_image(data)
         tags = config.get("default_tags", {})
-        item = await registry.get_source_item(source["id"], path.name)
-
-        await execute("DELETE FROM media_asset WHERE data_source_id = %s AND url = %s", (source["id"], str(path)))
+        prefix = (config.get("oss_prefix") or "").rstrip("/")
+        url = f"oss://{settings.oss_bucket}/{prefix}/{external_key}" if prefix and settings.oss_bucket else str(path)
+        await execute(
+            "DELETE FROM media_asset WHERE data_source_id = %s AND source_item_id = %s",
+            (source["id"], item["id"]),
+        )
         await execute(
             "INSERT INTO media_asset (data_source_id, source_item_id, url, tags, embedding)"
             " VALUES (%s, %s, %s, %s, %s::vector)",
-            (source["id"], item["id"] if item else None, str(path), Jsonb(tags), vector_literal(vec)),
+            (source["id"], item["id"], url, Jsonb(tags), vector_literal(vec)),
         )
 
-    async def _ingest_tabular(self, path: Path, source: dict, config: dict) -> None:
+    async def _ingest_tabular(
+        self, path: Path, source: dict, config: dict, item: dict, external_key: str
+    ) -> None:
         import openpyxl
 
         dataset_code = config.get("dataset_code") or source["code"]
-        item = await registry.get_source_item(source["id"], path.name)
-
         wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
         ws = wb.active
         rows_iter = ws.iter_rows(values_only=True)
@@ -123,14 +133,14 @@ class FileConnector:
             record = {header[i]: _cell_to_str(v) for i, v in enumerate(row) if i < len(header) and header[i]}
             if not any(record.values()):
                 continue
-            natural_key = f"{path.name}:{idx}"
+            natural_key = f"{external_key}:{idx}"
             await registry.upsert_structured_record(
                 data_source_id=source["id"],
                 dataset_code=dataset_code,
                 natural_key=natural_key,
                 data=record,
                 record_kind="row",
-                source_item_id=item["id"] if item else None,
+                source_item_id=item["id"],
                 row_date=_find_date(record),
             )
         wb.close()

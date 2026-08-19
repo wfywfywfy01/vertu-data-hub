@@ -15,8 +15,13 @@ Vertu production RDS is documented as `10.140.1.83:5432`.
 Create a server-side `.env` from this shape. Do not commit it:
 
 ```text
+APP_ENV=production
 DATABASE_URL=postgresql://<datahub_user>:<password>@10.140.1.83:5432/vertu_data_hub
 WATCHED_ROOT=/srv/vertu-agent/data/inbox
+OSS_ACCESS_KEY_ID=<ram_access_key_id>
+OSS_ACCESS_KEY_SECRET=<ram_access_key_secret>
+OSS_ENDPOINT=<oss_endpoint>
+OSS_BUCKET=<private_bucket>
 EMBEDDING_PROVIDER=api
 EMBEDDING_BASE_URL=<embedding_api_base_url>
 EMBEDDING_API_KEY=<embedding_api_key>
@@ -50,27 +55,15 @@ SELECT extversion FROM pg_extension WHERE extname = 'vector';
 
 ## Put files in
 
-The worker host must provide these directories under `WATCHED_ROOT`:
-
-```text
-/srv/vertu-agent/data/inbox/
-├── 政策产品文档/
-├── 陈列装修图片/
-├── 销售历史数据/
-└── 其他-待定/
-```
-
-Copy official files to the worker host, then run:
+Upload originals to the private OSS bucket under `raw/docs/`, `raw/images/`,
+`raw/sales/`, or `quarantine/`, then run:
 
 ```bash
-python -m app.cli.sync --source policy_product_docs
-python -m app.cli.sync --source store_display_media
-python -m app.cli.sync --source sales_history_files
+python -m app.cli.sync_oss --all
 ```
 
-The current connector reads a mounted filesystem. Original files stay on that
-worker path; chunks and vectors go to `vertu_data_hub`. If originals must live in
-OSS instead, add the object-storage connector before removing this mount.
+The worker incrementally mirrors changed objects into `WATCHED_ROOT`; originals
+remain in OSS while chunks and vectors go to `vertu_data_hub`.
 
 ## Acceptance
 
@@ -80,3 +73,5 @@ OSS instead, add the object-storage connector before removing this mount.
 - Repeating the same sync does not duplicate records.
 - A sample retrieval returns the expected source file.
 - Backup and rollback point are recorded before bulk ingestion.
+
+Use `docs/PILOT_RUNBOOK.md` for exact prefixes, acceptance, and rollback.

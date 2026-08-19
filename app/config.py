@@ -1,5 +1,6 @@
 """环境变量配置。全部配置从 .env / 环境变量读取，代码中不出现明文密钥。"""
 import os
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -11,6 +12,8 @@ def _env(key: str, default: str = "") -> str:
 
 
 class Settings:
+    app_env: str = _env("APP_ENV", "development").lower()
+
     # 数据库
     database_url: str = _env("DATABASE_URL", "postgresql://datahub:datahub@localhost:5434/vertu_data_hub")
 
@@ -31,8 +34,41 @@ class Settings:
     # 文件类数据源监听根目录
     watched_root: str = _env("WATCHED_ROOT", r"D:\vertu-agent-数据待处理")
 
+    # OSS 原文件信箱（生产）
+    oss_access_key_id: str = _env("OSS_ACCESS_KEY_ID")
+    oss_access_key_secret: str = _env("OSS_ACCESS_KEY_SECRET")
+    oss_endpoint: str = _env("OSS_ENDPOINT")
+    oss_bucket: str = _env("OSS_BUCKET")
+
     # vertu-cli（skill 取数）
     vertu_cli_bin: str = _env("VERTU_CLI_BIN", "vertu-cli")
 
 
 settings = Settings()
+
+
+def validate_production_settings(value: Settings = settings) -> None:
+    if value.app_env != "production":
+        return
+
+    errors = []
+    db_host = (urlsplit(value.database_url).hostname or "").lower()
+    if db_host in {"", "localhost", "127.0.0.1", "db"}:
+        errors.append("DATABASE_URL must point to the production PostgreSQL host")
+    for name in ("oss_access_key_id", "oss_access_key_secret", "oss_endpoint", "oss_bucket"):
+        if not getattr(value, name):
+            errors.append(f"{name.upper()} is required")
+    if (
+        value.embedding_provider != "api"
+        or not value.embedding_base_url
+        or not value.embedding_api_key
+    ):
+        errors.append("production text embedding API is required")
+    if (
+        value.image_embedding_provider != "api"
+        or not value.image_embedding_base_url
+        or not value.image_embedding_api_key
+    ):
+        errors.append("production image embedding API is required")
+    if errors:
+        raise RuntimeError("invalid production configuration: " + "; ".join(errors))

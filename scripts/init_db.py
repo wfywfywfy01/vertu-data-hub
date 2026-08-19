@@ -7,11 +7,13 @@ import asyncio
 from pathlib import Path
 
 from app import db
+from app.config import validate_production_settings
 
 SCHEMA_FILE = Path(__file__).resolve().parent.parent / "sql" / "schema.sql"
 
 
 async def main() -> None:
+    validate_production_settings()
     sql_text = SCHEMA_FILE.read_text(encoding="utf-8")
     pool = await db.get_pool()
     async with pool.connection() as conn:

@@ -22,7 +22,11 @@ async def test_doc_rag_ingest_and_idempotency(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "watched_root", str(tmp_path))
     subdir = tmp_path / "docs"
     subdir.mkdir()
-    (subdir / "policy.md").write_text("# Rule\n\n" + ("must not be blank " * 60), encoding="utf-8")
+    nested = subdir / "brand-a"
+    nested.mkdir()
+    (nested / "policy.md").write_text(
+        "# Rule\n\n" + ("must not be blank " * 60), encoding="utf-8"
+    )
 
     source = await registry.upsert_data_source(
         code=TEST_CODE, source_type="file", display_name="T",
@@ -38,6 +42,14 @@ async def test_doc_rag_ingest_and_idempotency(tmp_path, monkeypatch):
     )
     assert len(chunks) >= 1
     assert chunks[0]["tags"] == {"doc_type": "policy"}
+    assert chunks[0]["source_file"] == "brand-a/policy.md"
+    assert chunks[0]["source_item_id"] is not None
+
+    item = await db.fetch_one(
+        "SELECT external_key, status FROM source_item WHERE data_source_id = %s",
+        (source["id"],),
+    )
+    assert item == {"external_key": "brand-a/policy.md", "status": "ingested"}
 
     # 第二次同步，文件未变化，应跳过（不重复处理）
     result2 = await FileConnector().sync(source)

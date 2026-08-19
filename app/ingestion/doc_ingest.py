@@ -21,6 +21,7 @@ async def ingest_file(
     tags: dict | None = None,
     effective_date: date | None = None,
     expiry_date: date | None = None,
+    source_file: str | None = None,
 ) -> int:
     """解析+切片+入库单个文件，返回写入的片数。"""
     markdown = convert_to_markdown(path)
@@ -29,7 +30,7 @@ async def ingest_file(
         return 0
     vectors = await get_text_embedder().embed([c.text for c in chunks])
 
-    source_file = path.name
+    source_file = source_file or path.name
     pool = await db.get_pool()
     async with pool.connection() as conn:
         async with conn.transaction():

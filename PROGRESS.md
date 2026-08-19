@@ -1,5 +1,23 @@
 # Progress
 
+## 2026-08-19
+
+- Added private OSS inbox mirroring for documents, images, sales files, and the
+  quarantine prefix.
+- Preserved nested source paths and linked first-ingest chunks/assets to their
+  source item.
+- Added production configuration validation and non-zero sync failure exits.
+- Added controlled pilot upload, acceptance, and rollback runbook.
+
+## Verification
+
+- `python -m pytest -q`: 16 passed against isolated `vertu_data_hub_test`.
+- `python -m compileall -q app scripts tests`: passed.
+- `git diff --check`: passed.
+- Local pgvector test container healthy on port 5434.
+- RDS credentials, cloud `vector`, OSS credentials, and real embedding calls
+  remain target-environment acceptance items.
+
 ## 2026-08-11
 
 - Inherited Claude-built data foundation and RAG support.
@@ -7,7 +25,7 @@
 - Git baseline and worktree setup are being established.
 - Functional verification remains required before production use.
 
-## Verification
+## Previous verification
 
 - `python -m pytest -q`: 12 passed.
 - `python -m compileall -q app scripts tests`: passed.

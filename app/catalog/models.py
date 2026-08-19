@@ -11,6 +11,8 @@ class FileSourceConfig(BaseModel):
     default_tags: dict = Field(default_factory=dict)
     # tabular 用：写入哪个 dataset_code（structured_record.dataset_code）
     dataset_code: Optional[str] = None
+    # 生产 OSS 原文件前缀；worker 下载后仍用同一 FileConnector 解析。
+    oss_prefix: Optional[str] = None
 
 
 class SkillSourceConfig(BaseModel):

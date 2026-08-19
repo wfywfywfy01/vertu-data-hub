@@ -25,8 +25,10 @@ python -m app.cli.sync --all             # 跑一遍同步
 
 ## 加新门店陈列图/政策文档
 
-直接把文件丢进 `D:\vertu-agent-数据待处理\` 对应子目录，跑 `python -m app.cli.sync --all` 即可，
-未变化的文件会被跳过（按内容 hash 判断），重复跑安全。
+本地开发可把文件放进 `WATCHED_ROOT` 对应子目录，再运行
+`python -m app.cli.sync --all`。生产试点把原文件放进私有 OSS 的
+`raw/docs/`、`raw/images/`、`raw/sales/` 前缀，再运行
+`python -m app.cli.sync_oss --all`。未变化文件会跳过，重复运行安全。
 
 ## 测试
 
@@ -45,4 +47,4 @@ Before a change, read `AGENTS.md`, `CLAUDE.md`, the relevant schema and tests.
 Before review, run `pytest`, `python -m compileall -q app scripts tests`, and
 `docker compose config --quiet` with non-production environment values.
 
-Cloud database and file cutover steps: `docs/CLOUD_CUTOVER.md`.
+Pilot deployment, OSS upload, acceptance, and rollback: `docs/PILOT_RUNBOOK.md`.
