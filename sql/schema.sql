@@ -130,6 +130,10 @@ CREATE TABLE IF NOT EXISTS processing_job (
                       CHECK (status IN ('queued','running','succeeded','failed')),
     progress          SMALLINT NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
     idempotency_key   VARCHAR(200) NOT NULL UNIQUE,
+    dispatch_status   VARCHAR(20) NOT NULL DEFAULT 'pending'
+                      CHECK (dispatch_status IN ('pending','sent','failed')),
+    dispatch_error    TEXT,
+    dispatched_at     TIMESTAMPTZ,
     attempt_count     INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
     max_attempts      INTEGER NOT NULL DEFAULT 3 CHECK (max_attempts > 0),
     error_code        VARCHAR(80),
@@ -143,6 +147,14 @@ CREATE TABLE IF NOT EXISTS processing_job (
 );
 CREATE INDEX IF NOT EXISTS idx_processing_job_queue
     ON processing_job (queue_name, status, created_at);
+ALTER TABLE processing_job
+    ADD COLUMN IF NOT EXISTS dispatch_status VARCHAR(20) NOT NULL DEFAULT 'pending';
+ALTER TABLE processing_job
+    ADD COLUMN IF NOT EXISTS dispatch_error TEXT;
+ALTER TABLE processing_job
+    ADD COLUMN IF NOT EXISTS dispatched_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_processing_job_dispatch
+    ON processing_job (dispatch_status, created_at) WHERE status = 'queued';
 
 CREATE TABLE IF NOT EXISTS audit_event (
     id          BIGSERIAL PRIMARY KEY,

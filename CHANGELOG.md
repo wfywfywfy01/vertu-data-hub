@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added the private FastAPI service, short-lived PDCA JWT authorization, OSS direct-upload verification, and Celery routing with durable dispatch status.
+- Added a psycopg-compatible Windows API launcher and Redis Compose service.
 - Added dealer master records, multilingual alias search, explicit ownership, immutable asset versions, processing jobs, and append-only audit events.
 - Fixed direct execution of `scripts/init_db.py` from the repository root.
 - Reframed the service as the enterprise dealer knowledge hub behind PDCA.

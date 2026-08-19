@@ -1,5 +1,24 @@
 # Progress
 
+## 2026-08-19：里程碑 2B 私有 API 与任务路由
+
+- 实现最长 5 分钟的 PDCA HS256 服务令牌校验、角色校验和经销商范围二次授权。
+- 实现经销商、资产、任务、OSS 签名直传和上传完成 API。
+- 完成文件类型/大小、OSS key 前缀、对象大小、MIME 和 SHA-256 元数据校验。
+- 实现 Celery 队列路由及 PostgreSQL `pending/sent/failed` 权威投递状态。
+- 实现投递失败后使用同一幂等键重试，保证资料已保存且不重复生成版本。
+- 增加 Redis Compose 服务、API readiness 检查和 Windows Selector loop 启动入口。
+- 多模态 worker 尚未实现；任务当前只完成可靠入队。
+
+### 验证
+
+- `python -m pytest -q`：31 passed。
+- Uvicorn 真实进程：`GET /health/ready` 200，JWT `GET /v1/dealers` 200。
+- `python -m compileall -q app scripts tests`：通过。
+- `python scripts/init_db.py` 连续执行两次：通过。
+- `docker compose config --quiet`：通过。
+- 真实 Redis 冒烟受本机 Docker Hub 凭证错误阻塞；Celery 路由已通过适配器和 API 故障重试测试。
+
 ## 2026-08-19：里程碑 2A 数据核心
 
 - 实现人工确认的经销商主表、Unicode/波斯语归一化别名和模糊查询。

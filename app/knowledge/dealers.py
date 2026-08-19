@@ -45,6 +45,7 @@ async def propose_dealer(
     city: str | None = None,
     language_codes: Iterable[str] = (),
     aliases: Iterable[str] = (),
+    request_id: str | None = None,
 ) -> dict:
     name = _required(official_name, "official_name", 240)
     actor = _required(proposed_by, "proposed_by", 160)
@@ -80,14 +81,25 @@ async def propose_dealer(
                     """,
                     (dealer["id"], alias, alias_normalized),
                 )
-            await _audit(conn, actor, "dealer.proposed", "dealer", dealer["id"], {"status": "draft"})
+            await _audit(
+                conn, actor, "dealer.proposed", "dealer", dealer["id"],
+                {"status": "draft"}, request_id,
+            )
             return dealer
 
 
-async def search_dealers(query: str, *, limit: int = 20) -> list[dict]:
+async def search_dealers(
+    query: str,
+    *,
+    dealer_ids: Iterable[UUID | str] | None = None,
+    limit: int = 20,
+) -> list[dict]:
     normalized = normalize_name(_required(query, "query", 240))
     if not 1 <= limit <= 100:
         raise ValueError("limit must be between 1 and 100")
+    scoped_ids = None if dealer_ids is None else list(dealer_ids)
+    if scoped_ids == []:
+        return []
     return await db.fetch_all(
         """
         SELECT d.*,
@@ -104,15 +116,25 @@ async def search_dealers(query: str, *, limit: int = 20) -> list[dict]:
               OR similarity(d.normalized_name, %s) >= 0.18
               OR similarity(a.normalized_alias, %s) >= 0.18
           )
+          AND (%s::uuid[] IS NULL OR d.id = ANY(%s::uuid[]))
         GROUP BY d.id
         ORDER BY match_score DESC, d.official_name
         LIMIT %s
         """,
-        (normalized, normalized, normalized, normalized, normalized, normalized, limit),
+        (
+            normalized, normalized, normalized, normalized, normalized, normalized,
+            scoped_ids, scoped_ids, limit,
+        ),
     )
 
 
-async def confirm_dealer(dealer_id: UUID | str, *, confirmed_by: str, expected_version: int) -> dict:
+async def confirm_dealer(
+    dealer_id: UUID | str,
+    *,
+    confirmed_by: str,
+    expected_version: int,
+    request_id: str | None = None,
+) -> dict:
     actor = _required(confirmed_by, "confirmed_by", 160)
     pool = await db.get_pool()
     async with pool.connection() as conn:
@@ -130,8 +152,28 @@ async def confirm_dealer(dealer_id: UUID | str, *, confirmed_by: str, expected_v
             row = await cur.fetchone()
             if not row:
                 raise ValueError("dealer not found or version conflict")
-            await _audit(conn, actor, "dealer.confirmed", "dealer", row["id"], {"version": row["version"]})
+            await _audit(
+                conn, actor, "dealer.confirmed", "dealer", row["id"],
+                {"version": row["version"]}, request_id,
+            )
             return row
+
+
+async def list_dealers(dealer_ids: Iterable[UUID | str] | None = None, *, limit: int = 100) -> list[dict]:
+    if not 1 <= limit <= 100:
+        raise ValueError("limit must be between 1 and 100")
+    if dealer_ids is None:
+        return await db.fetch_all(
+            "SELECT * FROM dealer WHERE status <> 'merged' ORDER BY official_name LIMIT %s",
+            (limit,),
+        )
+    ids = list(dealer_ids)
+    if not ids:
+        return []
+    return await db.fetch_all(
+        "SELECT * FROM dealer WHERE status <> 'merged' AND id = ANY(%s) ORDER BY official_name LIMIT %s",
+        (ids, limit),
+    )
 
 
 async def assign_owner(
@@ -173,12 +215,15 @@ async def list_dealer_ids_for_principal(principal_id: str) -> list[UUID]:
     return [row["dealer_id"] for row in rows]
 
 
-async def _audit(conn, actor_id: str, action: str, object_type: str, object_id, payload: dict) -> None:
+async def _audit(
+    conn, actor_id: str, action: str, object_type: str, object_id, payload: dict,
+    request_id: str | None = None,
+) -> None:
     await conn.execute(
         """
-        INSERT INTO audit_event (actor_id, action, object_type, object_id, payload)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO audit_event (actor_id, action, object_type, object_id, payload, request_id)
+        VALUES (%s, %s, %s, %s, %s, %s)
         """,
-        (actor_id, action, object_type, object_id, Jsonb(payload)),
+        (actor_id, action, object_type, object_id, Jsonb(payload), request_id),
     )
 

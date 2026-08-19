@@ -18,6 +18,17 @@ python -m compileall -q app scripts tests
 docker compose config --quiet
 ```
 
+For API and queue changes also run:
+
+```powershell
+docker compose up -d redis
+python run_api.py
+```
+
+Check `/health/ready`, then call one authenticated `/v1/dealers` request. A
+successful upload must have a PostgreSQL `processing_job` row with
+`dispatch_status='sent'`; Redis queue depth alone is never success evidence.
+
 Use a disposable database for schema and ingestion checks. Confirm extension,
 table count, source count, and sample retrieval results before calling a sync
 successful.

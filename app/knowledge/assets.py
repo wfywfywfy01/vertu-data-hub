@@ -62,6 +62,7 @@ async def register_asset_version(
     idempotency_key: str,
     store_id: UUID | str | None = None,
     language_code: str | None = None,
+    request_id: str | None = None,
 ) -> dict:
     logical = normalize_name(_required(logical_key, "logical_key", 300))
     if not logical:
@@ -192,6 +193,7 @@ async def register_asset_version(
             await _audit(
                 conn, actor, "asset.version_registered", "knowledge_asset", asset["id"],
                 {"version_id": str(version["id"]), "duplicate_content": duplicate_content},
+                request_id,
             )
             cur = await conn.execute("SELECT * FROM knowledge_asset WHERE id = %s", (asset["id"],))
             return {
@@ -202,8 +204,20 @@ async def register_asset_version(
             }
 
 
-async def get_asset(asset_id: UUID | str) -> dict | None:
-    asset = await db.fetch_one("SELECT * FROM knowledge_asset WHERE id = %s", (asset_id,))
+async def get_asset(
+    asset_id: UUID | str,
+    dealer_ids: list[UUID | str] | None = None,
+) -> dict | None:
+    scoped_ids = None if dealer_ids is None else list(dealer_ids)
+    if scoped_ids == []:
+        return None
+    asset = await db.fetch_one(
+        """
+        SELECT * FROM knowledge_asset
+        WHERE id = %s AND (%s::uuid[] IS NULL OR dealer_id = ANY(%s::uuid[]))
+        """,
+        (asset_id, scoped_ids, scoped_ids),
+    )
     if not asset:
         return None
     current = await db.fetch_one(
@@ -211,6 +225,66 @@ async def get_asset(asset_id: UUID | str) -> dict | None:
         (asset_id,),
     )
     return {**asset, "current_version": current}
+
+
+async def list_assets(
+    dealer_ids: list[UUID | str] | None = None,
+    *,
+    dealer_id: UUID | str | None = None,
+    limit: int = 100,
+) -> list[dict]:
+    if not 1 <= limit <= 100:
+        raise ValueError("limit must be between 1 and 100")
+    conditions = ["status <> 'deleted'"]
+    params: list = []
+    if dealer_id is not None:
+        conditions.append("dealer_id = %s")
+        params.append(dealer_id)
+    elif dealer_ids is not None:
+        if not dealer_ids:
+            return []
+        conditions.append("dealer_id = ANY(%s)")
+        params.append(dealer_ids)
+    params.append(limit)
+    return await db.fetch_all(
+        f"SELECT * FROM knowledge_asset WHERE {' AND '.join(conditions)} ORDER BY updated_at DESC LIMIT %s",
+        params,
+    )
+
+
+async def get_job(
+    job_id: UUID | str,
+    dealer_ids: list[UUID | str] | None = None,
+) -> dict | None:
+    scoped_ids = None if dealer_ids is None else list(dealer_ids)
+    if scoped_ids == []:
+        return None
+    return await db.fetch_one(
+        """
+        SELECT * FROM processing_job
+        WHERE id = %s AND (%s::uuid[] IS NULL OR dealer_id = ANY(%s::uuid[]))
+        """,
+        (job_id, scoped_ids, scoped_ids),
+    )
+
+
+async def mark_job_dispatch(job_id: UUID | str, status: str, error: str | None = None) -> dict:
+    if status not in {"sent", "failed"}:
+        raise ValueError("invalid dispatch status")
+    row = await db.execute_returning(
+        """
+        UPDATE processing_job
+        SET dispatch_status = %s, dispatch_error = %s,
+            dispatched_at = CASE WHEN %s = 'sent' THEN now() ELSE dispatched_at END,
+            updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (status, error[:1000] if error else None, status, job_id),
+    )
+    if not row:
+        raise ValueError("job not found")
+    return row
 
 
 async def transition_job(

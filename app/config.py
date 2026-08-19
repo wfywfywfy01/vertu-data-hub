@@ -39,6 +39,16 @@ class Settings:
     oss_access_key_secret: str = _env("OSS_ACCESS_KEY_SECRET")
     oss_endpoint: str = _env("OSS_ENDPOINT")
     oss_bucket: str = _env("OSS_BUCKET")
+    oss_signed_url_seconds: int = int(_env("OSS_SIGNED_URL_SECONDS", "900"))
+
+    # PDCA 私有 API 服务令牌。生产只允许密钥文件，开发可用内联 secret。
+    service_token_issuer: str = _env("SERVICE_TOKEN_ISSUER", "pdca-workbench")
+    service_token_audience: str = _env("SERVICE_TOKEN_AUDIENCE", "dealer-knowledge-hub")
+    service_token_key_file: str = _env("SERVICE_TOKEN_KEY_FILE")
+    service_token_secret: str = _env("SERVICE_TOKEN_SECRET")
+
+    # Redis 只传递任务，PostgreSQL 保存权威状态。
+    redis_url: str = _env("REDIS_URL", "redis://localhost:6380/0")
 
     # vertu-cli（skill 取数）
     vertu_cli_bin: str = _env("VERTU_CLI_BIN", "vertu-cli")
@@ -48,6 +58,11 @@ settings = Settings()
 
 
 def validate_production_settings(value: Settings = settings) -> None:
+    if value.app_env not in {"development", "staging", "production"}:
+        raise RuntimeError("APP_ENV must be development, staging, or production")
+    signed_seconds = getattr(value, "oss_signed_url_seconds", 900)
+    if not 60 <= signed_seconds <= 3600:
+        raise RuntimeError("OSS_SIGNED_URL_SECONDS must be between 60 and 3600")
     if value.app_env != "production":
         return
 
@@ -58,6 +73,13 @@ def validate_production_settings(value: Settings = settings) -> None:
     for name in ("oss_access_key_id", "oss_access_key_secret", "oss_endpoint", "oss_bucket"):
         if not getattr(value, name):
             errors.append(f"{name.upper()} is required")
+    if not getattr(value, "service_token_key_file", ""):
+        errors.append("SERVICE_TOKEN_KEY_FILE is required")
+    if getattr(value, "service_token_secret", ""):
+        errors.append("SERVICE_TOKEN_SECRET is forbidden in production")
+    redis_host = (urlsplit(getattr(value, "redis_url", "")).hostname or "").lower()
+    if redis_host in {"", "localhost", "127.0.0.1"}:
+        errors.append("REDIS_URL must point to the production Redis host")
     if (
         value.embedding_provider != "api"
         or not value.embedding_base_url
