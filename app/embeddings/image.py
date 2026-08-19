@@ -45,9 +45,12 @@ class ApiImageEmbedder:
 
     async def embed_image(self, data: bytes) -> list[float]:
         import base64
+        from PIL import Image
 
         b64 = base64.b64encode(data).decode("ascii")
-        return await self._call([{"image": f"data:image/jpeg;base64,{b64}"}])
+        with Image.open(io.BytesIO(data)) as image:
+            content_type = Image.MIME.get(image.format, "application/octet-stream")
+        return await self._call([{"image": f"data:{content_type};base64,{b64}"}])
 
     async def embed_text(self, text: str) -> list[float]:
         return await self._call([{"text": text}])

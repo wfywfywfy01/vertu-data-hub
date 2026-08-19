@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 
 from app.chunking import chunk_markdown
@@ -49,6 +50,33 @@ def _extract_pdf_pages(path: Path) -> list[tuple[int, str]]:
         document.close()
 
 
+def _extract_pdf_ocr_pages(
+    path: Path, language_code: str | None = None
+) -> list[tuple[int, str]]:
+    import pypdfium2 as pdfium
+    from app.processing.images import extract_image
+
+    document = pdfium.PdfDocument(str(path))
+    try:
+        if len(document) > 200:
+            raise ValueError("scanned PDF exceeds 200-page OCR limit")
+        pages = []
+        for page_no, page in enumerate(document, start=1):
+            bitmap = page.render(scale=2)
+            try:
+                image = bitmap.to_pil()
+                output = BytesIO()
+                image.save(output, format="PNG")
+                image.close()
+                pages.append((page_no, extract_image(output.getvalue(), language_code).text))
+            finally:
+                bitmap.close()
+                page.close()
+        return pages
+    finally:
+        document.close()
+
+
 def _chunks(markdown: str, page_no: int | None) -> list[CitedChunk]:
     return [
         CitedChunk(chunk.text, chunk.section, page_no, page_no)
@@ -56,7 +84,7 @@ def _chunks(markdown: str, page_no: int | None) -> list[CitedChunk]:
     ]
 
 
-def extract_document(path: Path) -> ExtractedDocument:
+def extract_document(path: Path, language_code: str | None = None) -> ExtractedDocument:
     suffix = path.suffix.lower()
     if suffix in PLAIN_SUFFIXES:
         markdown = path.read_text(encoding="utf-8-sig")
@@ -89,6 +117,12 @@ def extract_document(path: Path) -> ExtractedDocument:
         else:
             markdown = ""
             chunks = []
+        if suffix == ".pdf" and not chunks:
+            pages = _extract_pdf_ocr_pages(path, language_code)
+            markdown = "\n\n".join(
+                f"<!-- page:{page_no} -->\n\n{text}" for page_no, text in pages if text.strip()
+            )
+            chunks = [chunk for page_no, text in pages for chunk in _chunks(text, page_no)]
     else:
         raise ValueError(f"unsupported document type: {suffix or '<none>'}")
     if not chunks:

@@ -22,6 +22,7 @@
 | `derived_artifact` | 文本、OCR、转写、关键帧或摘要的位置与流水线版本 |
 | `content_chunk` | 可引用文本、页码/时间戳、全文索引字段 |
 | `embedding` | chunk/asset、provider、model、dimension、pipeline version、向量 |
+| `image_embedding` | 图片向量、尺寸、真实格式、OCR 语言/行数/置信度和流水线版本 |
 
 `source_object.content_hash` 用于完全去重；逻辑版本由人工选择或规则识别，不因同名文件自动覆盖。
 

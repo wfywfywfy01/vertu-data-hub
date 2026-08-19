@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added local multilingual image OCR, scanned-PDF fallback, HEIC support, image vectors, retrieval-layer redaction, and fail-closed external image processing.
 - Added document workers for verified OSS download, Docling/PDFium extraction, cited chunks, embeddings, derived Markdown, and retry-aware job status.
 - Added the private FastAPI service, short-lived PDCA JWT authorization, OSS direct-upload verification, and Celery routing with durable dispatch status.
 - Added a psycopg-compatible Windows API launcher and Redis Compose service.

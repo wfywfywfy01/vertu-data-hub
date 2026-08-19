@@ -30,6 +30,9 @@ class Settings:
     image_embedding_api_key: str = _env("IMAGE_EMBEDDING_API_KEY")
     image_embedding_model: str = _env("IMAGE_EMBEDDING_MODEL", "multimodal-embedding-v1")
     image_embedding_dim: int = int(_env("IMAGE_EMBEDDING_DIM", "1024"))
+    allow_external_image_processing: bool = _env(
+        "ALLOW_EXTERNAL_IMAGE_PROCESSING", "false"
+    ).lower() in {"1", "true", "yes"}
 
     # 文件类数据源监听根目录
     watched_root: str = _env("WATCHED_ROOT", r"D:\vertu-agent-数据待处理")
@@ -86,11 +89,15 @@ def validate_production_settings(value: Settings = settings) -> None:
         or not value.embedding_api_key
     ):
         errors.append("production text embedding API is required")
-    if (
-        value.image_embedding_provider != "api"
-        or not value.image_embedding_base_url
-        or not value.image_embedding_api_key
-    ):
-        errors.append("production image embedding API is required")
+    allow_external_images = getattr(value, "allow_external_image_processing", False)
+    if allow_external_images:
+        if (
+            value.image_embedding_provider != "api"
+            or not value.image_embedding_base_url
+            or not value.image_embedding_api_key
+        ):
+            errors.append("external image processing requires the image embedding API")
+    elif value.image_embedding_provider != "hash":
+        errors.append("IMAGE_EMBEDDING_PROVIDER must be hash when external image processing is disabled")
     if errors:
         raise RuntimeError("invalid production configuration: " + "; ".join(errors))

@@ -23,7 +23,10 @@ class FakeStorage:
 
 @pytest.fixture
 async def document_record():
-    source = ("# Iran Dealer Policy\n\n" + "Authorized sales and service policy. " * 80).encode()
+    source = (
+        "# Iran Dealer Policy\n\nContact frank.fu@vertu.cn or +98 912 123 4567.\n\n"
+        + "Authorized sales and service policy. " * 80
+    ).encode()
     dealer = await dealers.propose_dealer(
         official_name=f"Document Dealer {uuid.uuid4().hex[:8]}",
         country_code="IR",
@@ -80,6 +83,8 @@ async def test_document_job_creates_cited_chunks_and_searchable_asset(document_r
     assert chunks[0]["section"] == "Iran Dealer Policy"
     assert chunks[0]["embedding_provider"] == "hash"
     assert chunks[0]["pipeline_version"] == PIPELINE_VERSION
+    assert all("frank.fu" not in chunk["text"] for chunk in chunks)
+    assert result["redaction_count"] == 2
 
     artifact = await db.fetch_one(
         "SELECT * FROM derived_artifact WHERE asset_version_id = %s",
@@ -87,6 +92,7 @@ async def test_document_job_creates_cited_chunks_and_searchable_asset(document_r
     )
     assert artifact["artifact_type"] == "markdown"
     assert artifact["object_key"] in storage.derived
+    assert b"frank.fu" not in storage.derived[artifact["object_key"]][0]
 
 
 async def test_document_job_rejects_download_with_wrong_hash(document_record):

@@ -198,6 +198,29 @@ CREATE INDEX IF NOT EXISTS idx_content_chunk_embedding
 CREATE INDEX IF NOT EXISTS idx_content_chunk_text
     ON content_chunk USING gin (to_tsvector('simple', text));
 
+CREATE TABLE IF NOT EXISTS image_embedding (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    dealer_id           UUID NOT NULL REFERENCES dealer(id),
+    asset_version_id    UUID NOT NULL REFERENCES asset_version(id),
+    embedding           vector(1024) NOT NULL,
+    embedding_provider  VARCHAR(40) NOT NULL,
+    embedding_model     VARCHAR(120) NOT NULL,
+    embedding_dimension INTEGER NOT NULL CHECK (embedding_dimension > 0),
+    width               INTEGER NOT NULL CHECK (width > 0),
+    height              INTEGER NOT NULL CHECK (height > 0),
+    image_format        VARCHAR(20) NOT NULL,
+    ocr_language        VARCHAR(20) NOT NULL,
+    ocr_line_count      INTEGER NOT NULL DEFAULT 0 CHECK (ocr_line_count >= 0),
+    ocr_mean_confidence REAL CHECK (ocr_mean_confidence BETWEEN 0 AND 1),
+    pipeline_version    VARCHAR(80) NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (asset_version_id, pipeline_version)
+);
+CREATE INDEX IF NOT EXISTS idx_image_embedding_dealer
+    ON image_embedding (dealer_id, asset_version_id);
+CREATE INDEX IF NOT EXISTS idx_image_embedding_vector
+    ON image_embedding USING hnsw (embedding vector_cosine_ops);
+
 CREATE TABLE IF NOT EXISTS audit_event (
     id          BIGSERIAL PRIMARY KEY,
     actor_id    VARCHAR(160) NOT NULL,

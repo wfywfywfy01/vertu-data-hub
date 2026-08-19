@@ -1,5 +1,22 @@
 # Progress
 
+## 2026-08-19：里程碑 3B 图片、扫描件 OCR 与脱敏
+
+- 实现 PNG/JPEG/WebP/HEIC 解码、像素上限和扩展名/真实格式一致性校验。
+- 实现本地 RapidOCR，支持默认中英文、Arabic/Persian 和 Russian 模型路由。
+- 实现扫描 PDF 无数字文本时按页 OCR，保留页码引用并限制最多 200 页。
+- 实现图片向量、OCR 分块、派生 Markdown、处理状态和 Celery `images` 路由。
+- 文档与 OCR 内容进入检索和派生预览前统一遮蔽邮箱、国际/本地电话号码。
+- 脱敏文档流水线升级为 `document-v2`，使用新派生对象 key，避免混用旧向量。
+- 默认禁止原图外发；只有显式授权的 `internal` 资料可调用云图片 embedding。
+
+### 验证
+
+- `python -m pytest -q`：49 passed。
+- 真实 PNG、HEIF 和纯图片 PDF：OCR 通过，扫描 PDF 页码引用通过。
+- Persian/Arabic OCR 模型：本机 ONNX 推理通过。
+- 音视频 worker、云 OSS/Redis 端到端和生产镜像模型预热仍未完成。
+
 ## 2026-08-19：里程碑 3A 文档处理 worker
 
 - 实现源文件下载、大小与 SHA-256 完整性校验、派生 Markdown 上传。

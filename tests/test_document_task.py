@@ -10,7 +10,7 @@ def test_celery_task_closes_async_pool(monkeypatch):
     async def fake_close():
         closed.append(True)
 
-    monkeypatch.setattr(document, "process_document_job", fake_process)
+    monkeypatch.setattr(document, "process_routed_job", fake_process)
     monkeypatch.setattr(document.db, "close_pool", fake_close)
 
     result = document.process_asset_task.run("job-id")

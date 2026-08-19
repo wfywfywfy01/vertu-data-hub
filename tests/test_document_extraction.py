@@ -66,3 +66,24 @@ def test_office_parse_failure_is_permanent(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match=r"\.docx parsing failed"):
         documents.extract_document(path)
+
+
+def test_scanned_pdf_uses_ocr_and_keeps_page_citation(tmp_path, monkeypatch):
+    path = tmp_path / "scan.pdf"
+    path.write_bytes(b"fake")
+    monkeypatch.setattr(
+        documents,
+        "_convert_with_docling",
+        lambda _path: (_ for _ in ()).throw(RuntimeError("docling unavailable")),
+    )
+    monkeypatch.setattr(documents, "_extract_pdf_pages", lambda _path: [(1, "")])
+    monkeypatch.setattr(
+        documents,
+        "_extract_pdf_ocr_pages",
+        lambda _path, language: [(1, f"OCR {language} Safiran Hamrah")],
+    )
+
+    extracted = documents.extract_document(path, "fa")
+
+    assert extracted.chunks[0].page_start == 1
+    assert "OCR fa Safiran Hamrah" in extracted.markdown

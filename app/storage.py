@@ -121,6 +121,9 @@ class OssStorage:
     def download_to_file(self, key: str, target) -> None:
         self.bucket.get_object_to_file(key, str(target))
 
+    def download_bytes(self, key: str) -> bytes:
+        return self.bucket.get_object(key).read()
+
     def put_object(self, key: str, data: bytes, *, content_type: str) -> None:
         self.bucket.put_object(key, data, headers={"Content-Type": content_type})
 

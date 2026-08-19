@@ -12,18 +12,33 @@ from app import db
 from app.config import settings
 from app.embeddings.text import get_text_embedder, vector_literal
 from app.knowledge import assets
-from app.processing.documents import ExtractedDocument, extract_document
+from app.processing.documents import CitedChunk, ExtractedDocument, extract_document
+from app.processing.redaction import redact_text
 from app.queue import celery_app
 from app.storage import build_derived_key, get_storage
 
 
-PIPELINE_VERSION = "document-v1"
+PIPELINE_VERSION = "document-v2"
 
 
 class PermanentProcessingError(Exception):
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
+
+
+def _redact_document(extracted: ExtractedDocument) -> tuple[ExtractedDocument, int]:
+    markdown = redact_text(extracted.markdown)
+    chunks = [
+        CitedChunk(
+            text=redact_text(chunk.text).text,
+            section=redact_text(chunk.section).text if chunk.section else None,
+            page_start=chunk.page_start,
+            page_end=chunk.page_end,
+        )
+        for chunk in extracted.chunks
+    ]
+    return ExtractedDocument(markdown=markdown.text, chunks=chunks), markdown.count
 
 
 def _embedding_identity() -> tuple[str, str, int]:
@@ -120,14 +135,20 @@ async def process_document_job(job_id, *, storage=None) -> dict:
             source_path = Path(temporary) / f"source{suffix}"
             await asyncio.to_thread(storage.download_to_file, context["object_key"], source_path)
             source_bytes = source_path.read_bytes()
-            if len(source_bytes) != context["byte_size"] or hashlib.sha256(source_bytes).hexdigest() != context["content_hash"]:
+            if (
+                len(source_bytes) != context["byte_size"]
+                or hashlib.sha256(source_bytes).hexdigest() != context["content_hash"]
+            ):
                 raise PermanentProcessingError(
                     "source_integrity_error", "downloaded object does not match registered size or hash"
                 )
-            extracted = await asyncio.to_thread(extract_document, source_path)
+            extracted = await asyncio.to_thread(
+                extract_document, source_path, context["language_code"]
+            )
+            extracted, redaction_count = _redact_document(extracted)
             artifact_bytes = extracted.markdown.encode("utf-8")
             artifact_key = build_derived_key(
-                context["dealer_id"], context["asset_version_id"], "document.md"
+                context["dealer_id"], context["asset_version_id"], "document-v2.md"
             )
             await asyncio.to_thread(
                 storage.put_object,
@@ -150,6 +171,7 @@ async def process_document_job(job_id, *, storage=None) -> dict:
             "chunk_count": len(extracted.chunks),
             "artifact_key": artifact_key,
             "pipeline_version": PIPELINE_VERSION,
+            "redaction_count": redaction_count,
         }
         await assets.transition_job(job_id, "succeeded", progress=100, output_data=output)
         return {"status": "succeeded", "retryable": False, **output}
@@ -169,11 +191,20 @@ async def process_document_job(job_id, *, storage=None) -> dict:
         return {"status": "failed", "retryable": True, "error_code": "document_processing_error"}
 
 
+async def process_routed_job(job_id: str) -> dict:
+    job = await assets.get_job(job_id)
+    if job and job["queue_name"] == "images":
+        from app.workers.image import process_image_job
+
+        return await process_image_job(job_id)
+    return await process_document_job(job_id)
+
+
 @celery_app.task(bind=True, name="dealer_knowledge.process_asset", max_retries=2)
 def process_asset_task(self, job_id: str):
     async def run_once():
         try:
-            result = await process_document_job(job_id)
+            result = await process_routed_job(job_id)
             should_retry = False
             if result.get("retryable"):
                 job = await assets.get_job(job_id)
