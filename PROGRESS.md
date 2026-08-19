@@ -1,5 +1,21 @@
 # Progress
 
+## 2026-08-19：里程碑 2A 数据核心
+
+- 实现人工确认的经销商主表、Unicode/波斯语归一化别名和模糊查询。
+- 实现 PDCA principal 到经销商的显式负责人关系。
+- 实现私有 OSS 源对象元数据、SHA-256 去重、逻辑资产和不可变版本。
+- 实现 PostgreSQL 权威处理任务状态、幂等键隔离和追加式审计。
+- 修复 `python scripts/init_db.py` 从仓库根目录无法导入 `app` 的启动缺陷。
+- 当前未实现 HTTP API、OSS 直传和 Celery worker；这些属于里程碑 2B。
+
+### 验证
+
+- `python -m pytest -q`：23 passed。
+- `python -m compileall -q app scripts tests`：通过。
+- `python scripts/init_db.py` 连续执行两次：通过。
+- `docker compose config --quiet`：通过。
+
 ## 2026-08-19：企业知识库架构基线
 
 - 确认 PDCA 与知识库使用私有 API 边界和独立数据库账号。

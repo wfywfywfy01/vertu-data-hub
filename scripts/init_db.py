@@ -4,7 +4,10 @@
     python scripts/init_db.py
 """
 import asyncio
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import db
 from app.config import validate_production_settings

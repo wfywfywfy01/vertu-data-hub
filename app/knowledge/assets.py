@@ -1,0 +1,290 @@
+"""Atomic source registration, asset versioning, and authoritative job state."""
+from __future__ import annotations
+
+import re
+from pathlib import PurePosixPath
+from uuid import UUID
+
+from psycopg.types.json import Jsonb
+
+from app import db
+from app.config import settings
+from app.knowledge.dealers import _audit, _required, normalize_name
+
+
+CATEGORIES = {
+    "dealer_profile", "contract_compliance", "store_display", "product_policy",
+    "sales_inventory", "marketing_training", "communications",
+    "logistics_after_sales", "finance_settlement", "media", "unclassified",
+}
+SENSITIVITIES = {"internal", "confidential", "restricted"}
+TRANSITIONS = {
+    "queued": {"running", "failed"},
+    "running": {"succeeded", "failed"},
+    "failed": {"queued"},
+    "succeeded": set(),
+}
+
+
+def _queue_for(content_type: str) -> str:
+    if content_type.startswith("image/"):
+        return "images"
+    if content_type.startswith("video/") or content_type.startswith("audio/"):
+        return "videos"
+    return "documents"
+
+
+def _validate_object_key(dealer_id: UUID | str, object_key: str) -> str:
+    key = str(object_key or "").strip().replace("\\", "/")
+    path = PurePosixPath(key)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError("object key must be inside dealer original prefix")
+    expected = f"{settings.app_env}/dealers/{dealer_id}/original/"
+    if not key.startswith(expected) or len(key) <= len(expected):
+        raise ValueError("object key must be inside dealer original prefix")
+    return key
+
+
+async def register_asset_version(
+    *,
+    dealer_id: UUID | str,
+    logical_key: str,
+    title: str,
+    category: str,
+    sensitivity: str,
+    bucket: str,
+    object_key: str,
+    content_hash: str,
+    original_name: str,
+    content_type: str,
+    byte_size: int,
+    actor_id: str,
+    idempotency_key: str,
+    store_id: UUID | str | None = None,
+    language_code: str | None = None,
+) -> dict:
+    logical = normalize_name(_required(logical_key, "logical_key", 300))
+    if not logical:
+        raise ValueError("logical_key has no searchable characters")
+    title = _required(title, "title", 500)
+    actor = _required(actor_id, "actor_id", 160)
+    bucket = _required(bucket, "bucket", 120)
+    original_name = _required(original_name, "original_name", 500)
+    content_type = _required(content_type, "content_type", 160).lower()
+    idempotency_key = _required(idempotency_key, "idempotency_key", 200)
+    object_key = _validate_object_key(dealer_id, object_key)
+    content_hash = str(content_hash or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", content_hash):
+        raise ValueError("content_hash must be lowercase SHA-256")
+    if category not in CATEGORIES:
+        raise ValueError("unsupported category")
+    if sensitivity not in SENSITIVITIES:
+        raise ValueError("unsupported sensitivity")
+    if byte_size <= 0:
+        raise ValueError("byte_size must be positive")
+
+    pool = await db.get_pool()
+    async with pool.connection() as conn:
+        async with conn.transaction():
+            existing = await _job_bundle(conn, idempotency_key)
+            if existing:
+                if str(existing["job"]["dealer_id"]) != str(dealer_id):
+                    raise ValueError("idempotency key belongs to another dealer")
+                existing["duplicate"] = True
+                return existing
+
+            cur = await conn.execute(
+                "SELECT id FROM dealer WHERE id = %s AND status IN ('draft','active')",
+                (dealer_id,),
+            )
+            if not await cur.fetchone():
+                raise ValueError("dealer is not active or draft")
+
+            cur = await conn.execute(
+                """
+                INSERT INTO source_object
+                    (dealer_id, bucket, object_key, content_hash, original_name,
+                     content_type, byte_size, uploaded_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (dealer_id, content_hash) DO UPDATE
+                    SET dealer_id = EXCLUDED.dealer_id
+                RETURNING *
+                """,
+                (dealer_id, bucket, object_key, content_hash, original_name,
+                 content_type, byte_size, actor),
+            )
+            source = await cur.fetchone()
+
+            cur = await conn.execute(
+                """
+                INSERT INTO knowledge_asset
+                    (dealer_id, store_id, logical_key, title, category, sensitivity, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (dealer_id, logical_key) DO UPDATE SET
+                    store_id = EXCLUDED.store_id,
+                    title = EXCLUDED.title,
+                    category = EXCLUDED.category,
+                    sensitivity = EXCLUDED.sensitivity,
+                    updated_at = now()
+                RETURNING *
+                """,
+                (dealer_id, store_id, logical, title, category, sensitivity, actor),
+            )
+            asset = await cur.fetchone()
+
+            cur = await conn.execute(
+                """
+                SELECT * FROM asset_version
+                WHERE asset_id = %s AND source_object_id = %s
+                ORDER BY version_number DESC LIMIT 1
+                """,
+                (asset["id"], source["id"]),
+            )
+            version = await cur.fetchone()
+            duplicate_content = version is not None
+            if not version:
+                cur = await conn.execute(
+                    "SELECT * FROM asset_version WHERE asset_id = %s AND is_current FOR UPDATE",
+                    (asset["id"],),
+                )
+                previous = await cur.fetchone()
+                number = previous["version_number"] + 1 if previous else 1
+                if previous:
+                    await conn.execute(
+                        "UPDATE asset_version SET is_current = FALSE WHERE id = %s",
+                        (previous["id"],),
+                    )
+                cur = await conn.execute(
+                    """
+                    INSERT INTO asset_version
+                        (asset_id, source_object_id, previous_version_id, version_number,
+                         language_code, created_by)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING *
+                    """,
+                    (asset["id"], source["id"], previous["id"] if previous else None,
+                     number, language_code, actor),
+                )
+                version = await cur.fetchone()
+                await conn.execute(
+                    "UPDATE knowledge_asset SET status = 'received', updated_at = now() WHERE id = %s",
+                    (asset["id"],),
+                )
+
+            job_status = "succeeded" if duplicate_content else "queued"
+            cur = await conn.execute(
+                """
+                INSERT INTO processing_job
+                    (dealer_id, asset_version_id, queue_name, status, progress,
+                     idempotency_key, input_data, output_data, finished_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s,
+                        CASE WHEN %s = 'succeeded' THEN now() END)
+                RETURNING *
+                """,
+                (
+                    dealer_id, version["id"], _queue_for(content_type), job_status,
+                    100 if duplicate_content else 0, idempotency_key,
+                    Jsonb({"source_object_id": str(source["id"])}),
+                    Jsonb({"duplicate_content": duplicate_content}), job_status,
+                ),
+            )
+            job = await cur.fetchone()
+            await _audit(
+                conn, actor, "asset.version_registered", "knowledge_asset", asset["id"],
+                {"version_id": str(version["id"]), "duplicate_content": duplicate_content},
+            )
+            cur = await conn.execute("SELECT * FROM knowledge_asset WHERE id = %s", (asset["id"],))
+            return {
+                "asset": await cur.fetchone(),
+                "version": version,
+                "job": job,
+                "duplicate": duplicate_content,
+            }
+
+
+async def get_asset(asset_id: UUID | str) -> dict | None:
+    asset = await db.fetch_one("SELECT * FROM knowledge_asset WHERE id = %s", (asset_id,))
+    if not asset:
+        return None
+    current = await db.fetch_one(
+        "SELECT * FROM asset_version WHERE asset_id = %s AND is_current",
+        (asset_id,),
+    )
+    return {**asset, "current_version": current}
+
+
+async def transition_job(
+    job_id: UUID | str,
+    status: str,
+    *,
+    progress: int | None = None,
+    error_code: str | None = None,
+    error_message: str | None = None,
+) -> dict:
+    if status not in TRANSITIONS:
+        raise ValueError("unknown job status")
+    pool = await db.get_pool()
+    async with pool.connection() as conn:
+        async with conn.transaction():
+            cur = await conn.execute("SELECT * FROM processing_job WHERE id = %s FOR UPDATE", (job_id,))
+            job = await cur.fetchone()
+            if not job:
+                raise ValueError("job not found")
+            if status not in TRANSITIONS[job["status"]]:
+                raise ValueError(f"invalid job transition: {job['status']} -> {status}")
+            next_progress = 100 if status == "succeeded" else (job["progress"] if progress is None else progress)
+            if not 0 <= next_progress <= 100:
+                raise ValueError("progress must be between 0 and 100")
+            cur = await conn.execute(
+                """
+                UPDATE processing_job
+                SET status = %s, progress = %s,
+                    attempt_count = attempt_count + CASE WHEN %s = 'running' THEN 1 ELSE 0 END,
+                    error_code = %s, error_message = %s,
+                    started_at = CASE WHEN %s = 'running' THEN coalesce(started_at, now()) ELSE started_at END,
+                    finished_at = CASE WHEN %s IN ('succeeded','failed') THEN now() ELSE NULL END,
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (status, next_progress, status, error_code, error_message, status, status, job_id),
+            )
+            updated = await cur.fetchone()
+            asset_status = {"running": "processing", "succeeded": "searchable", "failed": "failed"}.get(status)
+            if asset_status:
+                await conn.execute(
+                    """
+                    UPDATE knowledge_asset a SET status = %s, updated_at = now()
+                    WHERE EXISTS (
+                        SELECT 1 FROM asset_version v
+                        WHERE v.asset_id = a.id AND v.id = %s AND v.is_current
+                    )
+                    """,
+                    (asset_status, job["asset_version_id"]),
+                )
+            await _audit(
+                conn, "system-worker", "processing.transition", "processing_job", updated["id"],
+                {"from": job["status"], "to": status, "progress": next_progress},
+            )
+            return updated
+
+
+async def _job_bundle(conn, idempotency_key: str) -> dict | None:
+    cur = await conn.execute(
+        """
+        SELECT j.*, v.asset_id
+        FROM processing_job j
+        JOIN asset_version v ON v.id = j.asset_version_id
+        WHERE j.idempotency_key = %s
+        """,
+        (idempotency_key,),
+    )
+    job = await cur.fetchone()
+    if not job:
+        return None
+    cur = await conn.execute("SELECT * FROM asset_version WHERE id = %s", (job["asset_version_id"],))
+    version = await cur.fetchone()
+    cur = await conn.execute("SELECT * FROM knowledge_asset WHERE id = %s", (job["asset_id"],))
+    asset = await cur.fetchone()
+    job.pop("asset_id")
+    return {"asset": asset, "version": version, "job": job}

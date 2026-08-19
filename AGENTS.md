@@ -2,13 +2,14 @@
 
 ## Repository boundary
 
-This repository owns the Vertu data foundation: source registration, file and
-skill connectors, document ingestion, chunking, embeddings, structured lookup,
-and vector retrieval.
+This repository owns the dealer knowledge foundation: dealer master data,
+private object metadata, asset versions, processing jobs, ingestion, chunking,
+embeddings, retrieval, redaction, and audit.
 
-`vertu-store-agent` owns forms, ETL, store APIs, LLM orchestration, and user-facing
-agent behavior. Do not copy application code between repositories. Coordinate
-through the SQL schema and documented contracts.
+`PDCA-agent` owns identity, roles, pages, and workflows. Coordinate only through
+the private API contract in `docs/API_CONTRACT.md`; never share tables or import
+application code across repositories. `vertu-store-agent` is a migration source,
+not a runtime dependency.
 
 ## Change workflow
 

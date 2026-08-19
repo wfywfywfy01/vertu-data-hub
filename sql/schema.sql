@@ -1,6 +1,172 @@
 -- vertu-data-hub schema. 幂等：全部用 IF NOT EXISTS，重复执行安全。
 
 CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- ========== 经销商知识主表 ==========
+
+CREATE TABLE IF NOT EXISTS dealer (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    official_name   VARCHAR(240) NOT NULL,
+    normalized_name VARCHAR(240) NOT NULL,
+    country_code    VARCHAR(2) NOT NULL,
+    city            VARCHAR(120),
+    language_codes  TEXT[] NOT NULL DEFAULT '{}',
+    status          VARCHAR(20) NOT NULL DEFAULT 'draft'
+                    CHECK (status IN ('draft','active','inactive','merged')),
+    proposed_by     VARCHAR(160) NOT NULL,
+    confirmed_by    VARCHAR(160),
+    confirmed_at    TIMESTAMPTZ,
+    merged_into_id  UUID REFERENCES dealer(id),
+    version         INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (status <> 'merged' OR merged_into_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_dealer_normalized_name_trgm
+    ON dealer USING gin (normalized_name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_dealer_country_status
+    ON dealer (country_code, status);
+
+CREATE TABLE IF NOT EXISTS dealer_alias (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    dealer_id        UUID NOT NULL REFERENCES dealer(id) ON DELETE CASCADE,
+    alias             VARCHAR(240) NOT NULL,
+    normalized_alias  VARCHAR(240) NOT NULL,
+    source            VARCHAR(40) NOT NULL DEFAULT 'manual',
+    active            BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (dealer_id, normalized_alias)
+);
+CREATE INDEX IF NOT EXISTS idx_dealer_alias_normalized_trgm
+    ON dealer_alias USING gin (normalized_alias gin_trgm_ops);
+
+CREATE TABLE IF NOT EXISTS dealer_store (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    dealer_id   UUID NOT NULL REFERENCES dealer(id) ON DELETE CASCADE,
+    external_id VARCHAR(120),
+    name        VARCHAR(240) NOT NULL,
+    city        VARCHAR(120),
+    address     TEXT,
+    status      VARCHAR(20) NOT NULL DEFAULT 'active'
+                CHECK (status IN ('active','inactive')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (dealer_id, external_id)
+);
+
+CREATE TABLE IF NOT EXISTS dealer_owner (
+    dealer_id    UUID NOT NULL REFERENCES dealer(id) ON DELETE CASCADE,
+    principal_id VARCHAR(160) NOT NULL,
+    team_key      VARCHAR(160),
+    active        BOOLEAN NOT NULL DEFAULT TRUE,
+    assigned_by   VARCHAR(160) NOT NULL,
+    assigned_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (dealer_id, principal_id)
+);
+CREATE INDEX IF NOT EXISTS idx_dealer_owner_principal
+    ON dealer_owner (principal_id) WHERE active;
+
+-- ========== 不可变源对象、资产版本和权威任务状态 ==========
+
+CREATE TABLE IF NOT EXISTS source_object (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    dealer_id     UUID NOT NULL REFERENCES dealer(id),
+    bucket        VARCHAR(120) NOT NULL,
+    object_key    VARCHAR(900) NOT NULL,
+    content_hash  VARCHAR(64) NOT NULL CHECK (content_hash ~ '^[0-9a-f]{64}$'),
+    original_name VARCHAR(500) NOT NULL,
+    content_type  VARCHAR(160) NOT NULL,
+    byte_size     BIGINT NOT NULL CHECK (byte_size > 0),
+    uploaded_by   VARCHAR(160) NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (bucket, object_key),
+    UNIQUE (dealer_id, content_hash)
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_asset (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    dealer_id     UUID NOT NULL REFERENCES dealer(id),
+    store_id      UUID REFERENCES dealer_store(id),
+    logical_key   VARCHAR(300) NOT NULL,
+    title         VARCHAR(500) NOT NULL,
+    category      VARCHAR(40) NOT NULL,
+    sensitivity   VARCHAR(20) NOT NULL DEFAULT 'internal'
+                  CHECK (sensitivity IN ('internal','confidential','restricted')),
+    status        VARCHAR(30) NOT NULL DEFAULT 'received'
+                  CHECK (status IN ('received','identifying','awaiting_review','processing','searchable','failed','deleted')),
+    created_by    VARCHAR(160) NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (dealer_id, logical_key)
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_asset_filter
+    ON knowledge_asset (dealer_id, status, category, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS asset_version (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    asset_id          UUID NOT NULL REFERENCES knowledge_asset(id),
+    source_object_id  UUID NOT NULL REFERENCES source_object(id),
+    previous_version_id UUID REFERENCES asset_version(id),
+    version_number    INTEGER NOT NULL CHECK (version_number > 0),
+    is_current        BOOLEAN NOT NULL DEFAULT TRUE,
+    language_code     VARCHAR(16),
+    pipeline_version  VARCHAR(80) NOT NULL DEFAULT 'pending',
+    created_by        VARCHAR(160) NOT NULL,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (asset_id, version_number)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_current_version
+    ON asset_version (asset_id) WHERE is_current;
+
+CREATE TABLE IF NOT EXISTS processing_job (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    dealer_id         UUID NOT NULL REFERENCES dealer(id),
+    asset_version_id  UUID NOT NULL REFERENCES asset_version(id),
+    job_type          VARCHAR(40) NOT NULL DEFAULT 'ingestion',
+    queue_name        VARCHAR(40) NOT NULL,
+    status            VARCHAR(20) NOT NULL DEFAULT 'queued'
+                      CHECK (status IN ('queued','running','succeeded','failed')),
+    progress          SMALLINT NOT NULL DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
+    idempotency_key   VARCHAR(200) NOT NULL UNIQUE,
+    attempt_count     INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    max_attempts      INTEGER NOT NULL DEFAULT 3 CHECK (max_attempts > 0),
+    error_code        VARCHAR(80),
+    error_message     TEXT,
+    input_data        JSONB NOT NULL DEFAULT '{}',
+    output_data       JSONB NOT NULL DEFAULT '{}',
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    started_at        TIMESTAMPTZ,
+    finished_at       TIMESTAMPTZ,
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_processing_job_queue
+    ON processing_job (queue_name, status, created_at);
+
+CREATE TABLE IF NOT EXISTS audit_event (
+    id          BIGSERIAL PRIMARY KEY,
+    actor_id    VARCHAR(160) NOT NULL,
+    action      VARCHAR(100) NOT NULL,
+    object_type VARCHAR(80) NOT NULL,
+    object_id   UUID,
+    request_id  VARCHAR(200),
+    payload     JSONB NOT NULL DEFAULT '{}',
+    occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_audit_event_object
+    ON audit_event (object_type, object_id, occurred_at DESC);
+
+CREATE OR REPLACE FUNCTION prevent_audit_event_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'audit_event is append-only';
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_audit_event_append_only ON audit_event;
+CREATE TRIGGER trg_audit_event_append_only
+BEFORE UPDATE OR DELETE ON audit_event
+FOR EACH ROW EXECUTE FUNCTION prevent_audit_event_mutation();
 
 -- ========== 数据源目录：新增来源只 INSERT，不改表结构 ==========
 
