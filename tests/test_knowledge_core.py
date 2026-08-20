@@ -43,14 +43,15 @@ async def test_dealer_can_be_found_by_partial_alias_and_confirmed(dealer_record)
 
 
 async def test_owner_assignment_resolves_dealer_scope(dealer_record):
+    principal_id = f"pytest-owner-{uuid.uuid4()}"
     await dealers.assign_owner(
         dealer_record["id"],
-        principal_id="you-wenjing",
+        principal_id=principal_id,
         team_key="overseas-sales",
         assigned_by="pytest-admin",
     )
 
-    assert await dealers.list_dealer_ids_for_principal("you-wenjing") == [dealer_record["id"]]
+    assert await dealers.list_dealer_ids_for_principal(principal_id) == [dealer_record["id"]]
 
 
 async def test_asset_registration_is_idempotent_and_versions_content(dealer_record):
