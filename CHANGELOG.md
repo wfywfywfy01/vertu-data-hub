@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added guarded Chinese bigram fallback retrieval for compound dealer questions when strict full-text search returns no rows.
 - Fixed valid ISO dates being misclassified as phone numbers during redaction.
 - Added synchronous local dealer-file ingestion into the versioned searchable pipeline with managed originals and idempotent retries.
 - Added evidence-gated OpenRouter answers with validated citations, sensitivity blocking, output redaction, and hash-only audits.

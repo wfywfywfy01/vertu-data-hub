@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from uuid import UUID
 
 from psycopg.types.json import Jsonb
@@ -13,6 +14,11 @@ from app.processing.redaction import redact_text
 
 RRF_K = 60
 MAX_CANDIDATES = 100
+MAX_FALLBACK_TERMS = 32
+
+
+ASCII_TERM_RE = re.compile(r"[A-Za-z0-9]{2,}")
+CJK_RUN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
 
 
 BASE_SELECT = """
@@ -39,6 +45,16 @@ BASE_FROM = """
     JOIN knowledge_asset a ON a.id = v.asset_id
     JOIN source_object s ON s.id = v.source_object_id
 """
+
+
+def _fallback_terms(query: str) -> list[str]:
+    terms = [match.casefold() for match in ASCII_TERM_RE.findall(query)]
+    for run in CJK_RUN_RE.findall(query):
+        if len(run) == 2:
+            terms.append(run)
+        elif len(run) > 2:
+            terms.extend(run[index : index + 2] for index in range(len(run) - 1))
+    return list(dict.fromkeys(terms))[:MAX_FALLBACK_TERMS]
 
 
 def _scope(
@@ -203,6 +219,34 @@ async def search_knowledge(
         """,
         [safe_query, *scope_params, safe_query, candidates],
     )
+    if not text_hits:
+        fallback_terms = _fallback_terms(safe_query)
+        if fallback_terms:
+            minimum_matches = min(3, len(fallback_terms))
+            # ponytail: scoped scans suit the pilot; add pg_trgm if corpus latency grows.
+            text_hits = await db.fetch_all(
+                f"""
+                {BASE_SELECT},
+                    matched.matched_terms::real / %s AS lexical_score
+                {BASE_FROM}
+                CROSS JOIN LATERAL (
+                    SELECT count(*) AS matched_terms
+                    FROM unnest(%s::text[]) AS query_term(term)
+                    WHERE strpos(lower(c.text), query_term.term) > 0
+                ) matched
+                WHERE {where}
+                  AND matched.matched_terms >= %s
+                ORDER BY lexical_score DESC, c.id
+                LIMIT %s
+                """,
+                [
+                    len(fallback_terms),
+                    fallback_terms,
+                    *scope_params,
+                    minimum_matches,
+                    candidates,
+                ],
+            )
     results = _fuse(vector_hits, text_hits, top_k)
     await _record_audit(
         actor_id=actor_id,

@@ -3,6 +3,15 @@ import uuid
 from app.retrieval import knowledge_search
 
 
+def test_fallback_terms_extract_names_and_chinese_bigrams():
+    terms = knowledge_search._fallback_terms(
+        "Safiran Hamrah 的库存由谁录入，多久更新一次，哪天更新？"
+    )
+
+    assert {"safiran", "hamrah", "库存", "录入", "更新", "哪天"} <= set(terms)
+    assert len(terms) == len(set(terms))
+
+
 async def test_query_is_redacted_before_embedding(monkeypatch):
     embedded = []
 

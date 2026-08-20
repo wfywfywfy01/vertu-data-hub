@@ -3,6 +3,7 @@ import uuid
 import pytest
 
 from app import db
+from app.answers.service import answer_question
 from app.cli.ingest_local import _resolve_dealer
 from app.ingestion.local_inbox import ingest_local_path
 from app.knowledge import dealers
@@ -53,7 +54,9 @@ async def test_local_document_is_idempotent_versioned_and_searchable(
     inbox.mkdir()
     document = inbox / "inventory.md"
     document.write_text(
-        "# Safiran Hamrah Inventory\n\nCurrent weekly inventory contains 12 Signature phones.",
+        "# Safiran Hamrah Inventory\n\n"
+        "Current weekly inventory contains 12 Signature phones.\n\n"
+        "门店人员录入库存，每周五更新一次。",
         encoding="utf-8",
     )
     storage = LocalStorage(tmp_path / "objects")
@@ -101,6 +104,14 @@ async def test_local_document_is_idempotent_versioned_and_searchable(
     assert results
     assert results[0]["sensitivity"] == "confidential"
     assert results[0]["citation"]["original_name"] == "inventory.md"
+
+    answer = await answer_question(
+        "Safiran Hamrah 的库存由谁录入，多久更新一次，哪天更新？",
+        dealer_ids=[local_dealer["id"]],
+        actor_id="pytest-local",
+    )
+    assert answer["status"] == "sensitive_evidence_blocked"
+    assert answer["citations"][0]["original_name"] == "inventory.md"
 
     document.write_text(
         "# Safiran Hamrah Inventory\n\nCurrent weekly inventory contains 14 Signature phones.",
