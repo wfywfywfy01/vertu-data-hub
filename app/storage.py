@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+from pathlib import Path
 from pathlib import PurePosixPath
 import re
+import shutil
 import uuid
 from datetime import datetime, timezone
 
@@ -31,6 +34,71 @@ class ObjectMetadata:
 
 class ObjectNotFoundError(Exception):
     pass
+
+
+class LocalStorage:
+    """Managed local object storage for synchronous pilot ingestion."""
+
+    def __init__(self, root=None):
+        default = Path(settings.watched_root) / ".knowledge-objects"
+        self.root = Path(root or default).resolve()
+
+    def _target(self, key: str) -> Path:
+        path = PurePosixPath(str(key or "").replace("\\", "/"))
+        if path.is_absolute() or not path.parts or ".." in path.parts:
+            raise ValueError("unsafe local object key")
+        target = self.root.joinpath(*path.parts).resolve()
+        if target != self.root and self.root not in target.parents:
+            raise ValueError("unsafe local object key")
+        return target
+
+    def import_file(self, key: str, source, *, content_hash: str) -> None:
+        source_path = Path(source).resolve()
+        target = self._target(key)
+        if target.exists():
+            if file_hash(target) != content_hash:
+                raise RuntimeError("managed local object failed integrity check")
+            return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(f".tmp-{uuid.uuid4().hex[:8]}")
+        try:
+            shutil.copyfile(source_path, temporary)
+            if file_hash(temporary) != content_hash:
+                raise RuntimeError("copied local object failed integrity check")
+            temporary.replace(target)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def download_to_file(self, key: str, target) -> None:
+        source = self._target(key)
+        if not source.is_file():
+            raise ObjectNotFoundError(key)
+        shutil.copyfile(source, target)
+
+    def download_bytes(self, key: str) -> bytes:
+        source = self._target(key)
+        if not source.is_file():
+            raise ObjectNotFoundError(key)
+        return source.read_bytes()
+
+    def put_object(self, key: str, data: bytes, *, content_type: str) -> None:
+        del content_type
+        target = self._target(key)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(f".tmp-{uuid.uuid4().hex[:8]}")
+        try:
+            temporary.write_bytes(data)
+            temporary.replace(target)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def file_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def validate_upload(filename: str, content_type: str, byte_size: int, content_hash: str) -> str:

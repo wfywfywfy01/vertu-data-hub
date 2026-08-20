@@ -12,8 +12,6 @@ python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 copy .env.example .env                   # 按需改 embedding key 等
 python scripts/init_db.py                # 建表（幂等）
-python -m app.cli.register_source        # 注册初始数据源（幂等）
-python -m app.cli.sync --all             # 跑一遍同步
 python -m app.cli.preload_ocr             # 联网构建阶段预热 OCR 模型
 python run_api.py                         # 私有 API（默认 127.0.0.1:8080）
 celery -A app.queue:celery_app worker -Q documents,images --pool=solo  # Windows worker
@@ -69,8 +67,26 @@ OPENROUTER_MODEL=openai/gpt-4.1-mini
 
 ## 加新门店陈列图/政策文档
 
-本地开发可把文件放进 `WATCHED_ROOT` 对应子目录，再运行
-`python -m app.cli.sync --all`。生产试点把原文件放进私有 OSS 的
+本地试点使用新版同步导入命令。经销商必须先存在于人工确认主表；目录内支持
+PDF、DOCX、PPTX、XLSX、CSV、TXT、Markdown、JPG、PNG、WebP 和 HEIC：
+
+```powershell
+python -m app.cli.ingest_local `
+  --dealer "Safiran Hamrah" `
+  --path "D:\vertu-agent-数据待处理\Safiran Hamrah" `
+  --category unclassified `
+  --sensitivity confidential `
+  --language fa
+```
+
+命令把原文件复制到 `WATCHED_ROOT/.knowledge-objects` 托管区，登记资产和不可变
+版本，然后同步复用现有文档/图片 worker 写入 `content_chunk`，不依赖 Redis 或
+OSS。重复运行按文件路径和 SHA-256 跳过；同路径内容变化生成新版本。默认使用
+`confidential`，因此资料不会发送给外部回答模型。混合资料可先用 `unclassified`，
+整理后再按目录分别指定类别。当前音视频尚不支持本地处理，会明确报告失败。
+
+旧 `python -m app.cli.sync --all` 只维护继承的数据源目录和旧表，不用于新版问答。
+生产试点把原文件放进私有 OSS 的
 `raw/docs/`、`raw/images/`、`raw/sales/` 前缀，再运行
 `python -m app.cli.sync_oss --all`。未变化文件会跳过，重复运行安全。
 

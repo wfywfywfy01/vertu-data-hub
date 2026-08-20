@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added synchronous local dealer-file ingestion into the versioned searchable pipeline with managed originals and idempotent retries.
 - Added evidence-gated OpenRouter answers with validated citations, sensitivity blocking, output redaction, and hash-only audits.
 - Added dealer-scoped hybrid full-text/vector search with RRF, cited redacted results, and hash-only query auditing.
 - Added local multilingual image OCR, scanned-PDF fallback, HEIC support, image vectors, retrieval-layer redaction, and fail-closed external image processing.
