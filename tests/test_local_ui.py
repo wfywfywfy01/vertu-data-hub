@@ -19,6 +19,7 @@ def test_local_ui_serves_page_and_assets():
     assert "--accent" in styles.text
     assert script.status_code == 200
     assert "loadDealers" in script.text
+    assert "本地知识库服务已停止" in script.text
 
 
 def test_local_ui_is_hidden_outside_development(monkeypatch):

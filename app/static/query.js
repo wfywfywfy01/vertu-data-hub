@@ -35,6 +35,12 @@ function setNotice(message, state = "") {
   notice.className = `notice ${state}`.trim();
 }
 
+function errorMessage(error) {
+  return error instanceof TypeError
+    ? "本地知识库服务已停止，请重新启动服务后刷新页面。"
+    : error.message;
+}
+
 function setSearching(active) {
   searchButton.disabled = active || !dealerSelect.value;
   searchButton.textContent = active ? "检索中" : "查询";
@@ -106,7 +112,7 @@ async function loadDealers() {
   } catch (error) {
     dealerSelect.replaceChildren(new Option("连接失败"));
     dealerMeta.textContent = "数据库连接异常";
-    setNotice(error.message, "error");
+    setNotice(errorMessage(error), "error");
   }
 }
 
@@ -146,7 +152,7 @@ form.addEventListener("submit", async (event) => {
     renderResults(data.items);
     setNotice(`已在 ${data.dealer.official_name} 范围内完成检索。`);
   } catch (error) {
-    setNotice(error.message, "error");
+    setNotice(errorMessage(error), "error");
   } finally {
     setSearching(false);
   }
