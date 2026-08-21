@@ -24,6 +24,10 @@ API 需要 PDCA 服务令牌密钥。开发环境在 `.env` 设置至少 32 字�
 docker compose up -d redis
 ```
 
+本机试点查询页：`http://127.0.0.1:8080/ui`。页面支持经销商和资料分类筛选、
+脱敏片段、相关度及原始文件引用；只在 `development` 环境且仅对 loopback 请求开放。
+生产用户界面由 PDCA 提供身份与权限后调用私有 API，不使用该本机入口。
+
 开发环境接口文档：`http://127.0.0.1:8080/docs`。当前已支持经销商主表、OSS
 签名直传、上传完成校验、资产版本、Celery 路由，以及 PDF/DOCX/PPTX/XLSX/
 CSV/TXT/Markdown 文档解析、分块、向量化和页码引用。图片与扫描件 OCR 已交付；

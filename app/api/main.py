@@ -11,6 +11,7 @@ from app.api.errors import ApiError, api_error_handler
 from app.api.routes import router
 from app import db
 from app.config import settings, validate_production_settings
+from app.local_ui import router as local_ui_router
 
 
 @asynccontextmanager
@@ -64,3 +65,4 @@ async def ready():
 
 
 app.include_router(router)
+app.include_router(local_ui_router)
