@@ -68,7 +68,17 @@ OPENROUTER_MODEL=openai/gpt-4.1-mini
 
 ## 加新门店陈列图/政策文档
 
-本地试点使用新版同步导入命令。经销商必须先存在于人工确认主表；目录内支持
+本地资料按所有权分为经销商、部门公用、公司公用三类：
+
+```text
+D:\vertu-agent-数据待处理\
+├── VMG\
+├── Safiran Hamrah\
+├── _部门公用\海外销售部\
+└── _公司公用\
+```
+
+经销商必须先存在于人工确认主表；目录内支持
 PDF、DOCX、PPTX、XLSX、CSV、TXT、Markdown、JPG、PNG、WebP 和 HEIC：
 
 ```powershell
@@ -79,6 +89,27 @@ python -m app.cli.ingest_local `
   --sensitivity confidential `
   --language fa
 ```
+
+部门和公司资料分别使用：
+
+```powershell
+python -m app.cli.ingest_local `
+  --department "overseas-sales" `
+  --path "D:\vertu-agent-数据待处理\_部门公用\海外销售部" `
+  --category unclassified `
+  --sensitivity confidential `
+  --language zh
+
+python -m app.cli.ingest_local `
+  --company `
+  --path "D:\vertu-agent-数据待处理\_公司公用" `
+  --category unclassified `
+  --sensitivity internal `
+  --language zh
+```
+
+`--department` 使用 PDCA 令牌中的稳定 `team_keys`，不要使用人员姓名。经销商、
+部门和公司参数互斥，系统不会用假经销商承载共享资料。
 
 命令把原文件复制到 `WATCHED_ROOT/.knowledge-objects` 托管区，登记资产和不可变
 版本，然后同步复用现有文档/图片 worker 写入 `content_chunk`，不依赖 Redis 或

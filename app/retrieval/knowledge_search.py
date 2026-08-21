@@ -9,6 +9,7 @@ from psycopg.types.json import Jsonb
 
 from app import db
 from app.embeddings.text import get_text_embedder, vector_literal
+from app.knowledge.scopes import authorized_scope_sql
 from app.processing.redaction import redact_text
 
 
@@ -24,7 +25,9 @@ CJK_RUN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
 BASE_SELECT = """
     SELECT
         c.id AS chunk_id,
-        c.dealer_id,
+        a.dealer_id,
+        a.scope_type,
+        a.scope_key,
         c.asset_version_id,
         c.text,
         c.section,
@@ -59,19 +62,14 @@ def _fallback_terms(query: str) -> list[str]:
 
 def _scope(
     dealer_ids: list[UUID] | None,
+    team_keys: list[str] | None,
     dealer_id: UUID | None,
     category: str | None,
 ) -> tuple[str, list]:
-    conditions = ["a.status = 'searchable'", "v.is_current"]
-    params: list = []
-    if dealer_ids is not None:
-        if not dealer_ids:
-            conditions.append("FALSE")
-        else:
-            conditions.append("c.dealer_id = ANY(%s)")
-            params.append(dealer_ids)
+    authorized, params = authorized_scope_sql("a", dealer_ids, team_keys)
+    conditions = ["a.status = 'searchable'", "v.is_current", authorized]
     if dealer_id is not None:
-        conditions.append("c.dealer_id = %s")
+        conditions.append("(a.scope_type <> 'dealer' OR a.dealer_id = %s)")
         params.append(dealer_id)
     if category is not None:
         conditions.append("a.category = %s")
@@ -101,6 +99,8 @@ def _fuse(vector_hits: list[dict], text_hits: list[dict], top_k: int) -> list[di
 
     results = []
     for item in sorted(combined.values(), key=lambda row: row["score"], reverse=True)[:top_k]:
+        scope_type = item.get("scope_type", "dealer")
+        scope_key = item.get("scope_key") or str(item["dealer_id"])
         safe_text = redact_text(item["text"]).text
         safe_section = redact_text(item["section"]).text if item["section"] else None
         safe_title = redact_text(item["title"]).text
@@ -111,6 +111,8 @@ def _fuse(vector_hits: list[dict], text_hits: list[dict], top_k: int) -> list[di
                 "asset_id": str(item["asset_id"]),
                 "asset_version_id": str(item["asset_version_id"]),
                 "version_number": item["version_number"],
+                "scope_type": scope_type,
+                "scope_key": scope_key,
                 "title": safe_title,
                 "original_name": safe_original_name,
                 "page_start": item["page_start"],
@@ -121,6 +123,8 @@ def _fuse(vector_hits: list[dict], text_hits: list[dict], top_k: int) -> list[di
             {
                 "chunk_id": item["chunk_id"],
                 "dealer_id": item["dealer_id"],
+                "scope_type": scope_type,
+                "scope_key": scope_key,
                 "asset_id": item["asset_id"],
                 "text": safe_text,
                 "section": safe_section,
@@ -167,6 +171,7 @@ async def search_knowledge(
     *,
     dealer_ids: list[UUID] | None,
     actor_id: str,
+    team_keys: list[str] | None = None,
     request_id: str | None = None,
     dealer_id: UUID | None = None,
     category: str | None = None,
@@ -179,16 +184,7 @@ async def search_knowledge(
         raise ValueError("query must not exceed 500 characters")
     if not 1 <= top_k <= 20:
         raise ValueError("top_k must be between 1 and 20")
-    if dealer_ids == []:
-        await _record_audit(
-            actor_id=actor_id,
-            query=query,
-            results=[],
-            request_id=request_id,
-        )
-        return []
-
-    where, scope_params = _scope(dealer_ids, dealer_id, category)
+    where, scope_params = _scope(dealer_ids, team_keys, dealer_id, category)
     candidates = min(MAX_CANDIDATES, max(20, top_k * 10))
     safe_query = redact_text(query).text
     vector = (await get_text_embedder().embed([safe_query]))[0]

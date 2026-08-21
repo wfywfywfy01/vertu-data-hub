@@ -15,13 +15,14 @@ from app.answers.service import (
 )
 from app.config import settings
 from app.knowledge import assets, dealers
+from app.knowledge.scopes import KnowledgeScope, resolve_scope
 from app.queue import enqueue_processing_job
 from app.retrieval.knowledge_search import search_knowledge
 from app.storage import (
     ObjectNotFoundError,
-    build_original_key,
+    build_scoped_original_key,
     get_storage,
-    validate_original_key,
+    validate_scoped_original_key,
     validate_upload,
 )
 
@@ -42,7 +43,9 @@ class DealerConfirmation(BaseModel):
 
 
 class PresignRequest(BaseModel):
-    dealer_id: UUID
+    dealer_id: UUID | None = None
+    scope_type: str = Field(default="dealer", max_length=20)
+    scope_key: str | None = Field(default=None, max_length=160)
     filename: str = Field(min_length=1, max_length=500)
     content_type: str = Field(min_length=1, max_length=160)
     byte_size: int = Field(gt=0)
@@ -50,7 +53,9 @@ class PresignRequest(BaseModel):
 
 
 class CompleteRequest(BaseModel):
-    dealer_id: UUID
+    dealer_id: UUID | None = None
+    scope_type: str = Field(default="dealer", max_length=20)
+    scope_key: str | None = Field(default=None, max_length=160)
     logical_key: str = Field(min_length=1, max_length=300)
     title: str = Field(min_length=1, max_length=500)
     category: str = Field(min_length=1, max_length=40)
@@ -73,6 +78,22 @@ class SearchRequest(BaseModel):
 
 class AnswerRequest(SearchRequest):
     top_k: int = Field(default=5, ge=1, le=10)
+
+
+def _request_scope(body: PresignRequest | CompleteRequest) -> KnowledgeScope:
+    return resolve_scope(
+        dealer_id=body.dealer_id,
+        scope_type=body.scope_type,
+        scope_key=body.scope_key,
+    )
+
+
+def _require_scope_write(claims: ServiceClaims, scope: KnowledgeScope) -> None:
+    claims.require_knowledge_scope(scope)
+    if scope.scope_type == "department":
+        claims.require_role("manager", "admin")
+    elif scope.scope_type == "company":
+        claims.require_role("admin")
 
 
 @router.get("/dealers")
@@ -132,10 +153,11 @@ async def presign_upload(
     claims: ServiceClaims = Depends(require_service_claims),
 ):
     claims.require_role("sales", "manager", "admin")
-    claims.require_dealer(body.dealer_id)
     try:
+        scope = _request_scope(body)
+        _require_scope_write(claims, scope)
         validate_upload(body.filename, body.content_type, body.byte_size, body.content_hash)
-        key = build_original_key(body.dealer_id, body.filename)
+        key = build_scoped_original_key(scope, body.filename)
         signed = await asyncio.to_thread(
             get_storage().presign_upload,
             key,
@@ -145,6 +167,8 @@ async def presign_upload(
         )
     except ValueError as exc:
         raise ApiError(422, "invalid_upload", str(exc))
+    except ApiError:
+        raise
     except Exception as exc:
         raise ApiError(503, "storage_unavailable", "Object storage is unavailable") from exc
     return {"object_key": key, **signed}
@@ -158,13 +182,16 @@ async def complete_upload(
     claims: ServiceClaims = Depends(require_service_claims),
 ):
     claims.require_role("sales", "manager", "admin")
-    claims.require_dealer(body.dealer_id)
     try:
+        scope = _request_scope(body)
+        _require_scope_write(claims, scope)
         validate_upload(body.original_name, body.content_type, body.byte_size, body.content_hash)
-        validate_original_key(body.dealer_id, body.object_key)
+        validate_scoped_original_key(scope, body.object_key)
         metadata = await asyncio.to_thread(get_storage().head_object, body.object_key)
     except ValueError as exc:
         raise ApiError(422, "invalid_upload", str(exc))
+    except ApiError:
+        raise
     except (ObjectNotFoundError, KeyError):
         raise ApiError(409, "object_not_found", "Uploaded object was not found")
     except Exception as exc:
@@ -212,6 +239,7 @@ async def get_assets(
         claims.require_dealer(dealer_id)
     return await assets.list_assets(
         None if claims.unrestricted else list(claims.dealer_ids),
+        team_keys=list(claims.team_keys),
         dealer_id=dealer_id,
     )
 
@@ -221,6 +249,7 @@ async def get_asset(asset_id: UUID, claims: ServiceClaims = Depends(require_serv
     row = await assets.get_asset(
         asset_id,
         None if claims.unrestricted else list(claims.dealer_ids),
+        list(claims.team_keys),
     )
     if not row:
         raise ApiError(404, "asset_not_found", "Asset was not found")
@@ -232,6 +261,7 @@ async def get_job(job_id: UUID, claims: ServiceClaims = Depends(require_service_
     row = await assets.get_job(
         job_id,
         None if claims.unrestricted else list(claims.dealer_ids),
+        list(claims.team_keys),
     )
     if not row:
         raise ApiError(404, "job_not_found", "Job was not found")
@@ -252,6 +282,7 @@ async def search(
         rows = await search_knowledge(
             body.query,
             dealer_ids=None if claims.unrestricted else list(claims.dealer_ids),
+            team_keys=list(claims.team_keys),
             actor_id=claims.user_id,
             request_id=request.state.request_id,
             dealer_id=body.dealer_id,
@@ -279,6 +310,7 @@ async def answer(
         return await answer_question(
             body.query,
             dealer_ids=None if claims.unrestricted else list(claims.dealer_ids),
+            team_keys=list(claims.team_keys),
             actor_id=claims.user_id,
             request_id=request.state.request_id,
             dealer_id=body.dealer_id,

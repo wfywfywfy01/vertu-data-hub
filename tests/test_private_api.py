@@ -17,7 +17,7 @@ from app.storage import ObjectMetadata
 SECRET = "pytest-service-token-secret-at-least-32-bytes"
 
 
-def _token(*, dealer_ids=(), role="sales", scope="self", expires_in=300):
+def _token(*, dealer_ids=(), team_keys=(), role="sales", scope="self", expires_in=300):
     now = datetime.now(timezone.utc)
     return jwt.encode(
         {
@@ -28,6 +28,7 @@ def _token(*, dealer_ids=(), role="sales", scope="self", expires_in=300):
             "role": role,
             "scope": scope,
             "dealer_ids": [str(value) for value in dealer_ids],
+            "team_keys": list(team_keys),
             "iat": now,
             "exp": now + timedelta(seconds=expires_in),
             "jti": str(uuid.uuid4()),
@@ -89,6 +90,140 @@ class FakeStorage:
 
     def head_object(self, key):
         return self.objects[key]
+
+
+async def test_department_upload_requires_matching_manager_scope(client, monkeypatch):
+    from app.api import routes
+
+    storage = FakeStorage()
+    dispatched = []
+    monkeypatch.setattr(routes, "get_storage", lambda: storage)
+    monkeypatch.setattr(
+        routes,
+        "enqueue_processing_job",
+        lambda job_id, queue_name: dispatched.append((str(job_id), queue_name)),
+    )
+    payload = {
+        "scope_type": "department",
+        "scope_key": "overseas-sales",
+        "filename": "shared-policy.pdf",
+        "content_type": "application/pdf",
+        "byte_size": 120,
+        "content_hash": "d" * 64,
+    }
+
+    allowed = await client.post(
+        "/v1/uploads/presign",
+        headers={
+            "Authorization": f"Bearer {_token(team_keys=['overseas-sales'], role='manager', scope='team')}"
+        },
+        json=payload,
+    )
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["object_key"].startswith(
+        "development/departments/overseas-sales/original/"
+    )
+
+    asset_id = None
+    try:
+        completed = await client.post(
+            "/v1/assets/complete",
+            headers={
+                "Authorization": f"Bearer {_token(team_keys=['overseas-sales'], role='manager', scope='team')}",
+                "Idempotency-Key": f"pytest-{uuid.uuid4()}",
+            },
+            json={
+                "scope_type": "department",
+                "scope_key": "overseas-sales",
+                "logical_key": f"shared-policy-{uuid.uuid4()}",
+                "title": "Shared policy",
+                "category": "product_policy",
+                "sensitivity": "confidential",
+                "object_key": allowed.json()["object_key"],
+                "content_hash": "d" * 64,
+                "original_name": "shared-policy.pdf",
+                "content_type": "application/pdf",
+                "byte_size": 120,
+            },
+        )
+        assert completed.status_code == 202, completed.text
+        body = completed.json()
+        asset_id = uuid.UUID(body["asset"]["id"])
+        assert body["asset"]["scope_type"] == "department"
+        assert body["asset"]["dealer_id"] is None
+        assert dispatched == [(body["job"]["id"], "documents")]
+
+        visible = await client.get(
+            f"/v1/assets/{asset_id}",
+            headers={
+                "Authorization": f"Bearer {_token(team_keys=['overseas-sales'], role='manager', scope='team')}"
+            },
+        )
+        hidden = await client.get(
+            f"/v1/assets/{asset_id}",
+            headers={
+                "Authorization": f"Bearer {_token(team_keys=['finance'], role='manager', scope='team')}"
+            },
+        )
+        assert visible.status_code == 200
+        assert hidden.status_code == 404
+    finally:
+        if asset_id:
+            source = await db.fetch_one(
+                "SELECT source_object_id FROM asset_version WHERE asset_id = %s",
+                (asset_id,),
+            )
+            await db.execute(
+                "DELETE FROM processing_job WHERE asset_version_id IN "
+                "(SELECT id FROM asset_version WHERE asset_id = %s)",
+                (asset_id,),
+            )
+            await db.execute("DELETE FROM asset_version WHERE asset_id = %s", (asset_id,))
+            await db.execute("DELETE FROM knowledge_asset WHERE id = %s", (asset_id,))
+            if source:
+                await db.execute(
+                    "DELETE FROM source_object WHERE id = %s AND NOT EXISTS "
+                    "(SELECT 1 FROM asset_version WHERE source_object_id = source_object.id)",
+                    (source["source_object_id"],),
+                )
+
+    wrong_team = await client.post(
+        "/v1/uploads/presign",
+        headers={
+            "Authorization": f"Bearer {_token(team_keys=['finance'], role='manager', scope='team')}"
+        },
+        json=payload,
+    )
+    assert wrong_team.status_code == 403
+    assert wrong_team.json()["code"] == "department_scope_denied"
+
+    sales = await client.post(
+        "/v1/uploads/presign",
+        headers={
+            "Authorization": f"Bearer {_token(team_keys=['overseas-sales'], role='sales')}"
+        },
+        json=payload,
+    )
+    assert sales.status_code == 403
+    assert sales.json()["code"] == "role_denied"
+
+    company_payload = {**payload, "scope_type": "company", "scope_key": None}
+    company_admin = await client.post(
+        "/v1/uploads/presign",
+        headers={"Authorization": f"Bearer {_token(role='admin', scope='all')}"},
+        json=company_payload,
+    )
+    company_manager = await client.post(
+        "/v1/uploads/presign",
+        headers={"Authorization": f"Bearer {_token(role='manager', scope='team')}"},
+        json=company_payload,
+    )
+    assert company_admin.status_code == 200
+    assert company_admin.json()["object_key"].startswith(
+        "development/companies/vertu/original/"
+    )
+    assert company_manager.status_code == 403
+    assert company_manager.json()["code"] == "role_denied"
 
 
 async def test_upload_completion_is_saved_and_routed(client, api_dealer, monkeypatch):

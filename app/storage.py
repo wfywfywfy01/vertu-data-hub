@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime, timezone
 
 from app.config import settings
+from app.knowledge.scopes import KnowledgeScope, resolve_scope
 
 
 DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".csv", ".txt", ".md"}
@@ -131,29 +132,46 @@ def validate_upload(filename: str, content_type: str, byte_size: int, content_ha
     return extension
 
 
-def build_original_key(dealer_id, filename: str) -> str:
+def build_scoped_original_key(scope: KnowledgeScope, filename: str) -> str:
     extension = PurePosixPath(str(filename).replace("\\", "/")).suffix.lower() or ".bin"
     now = datetime.now(timezone.utc)
     return (
-        f"{settings.app_env}/dealers/{dealer_id}/original/"
+        f"{settings.app_env}/{scope.storage_prefix}/original/"
         f"{now:%Y/%m}/{uuid.uuid4().hex}{extension}"
     )
 
 
-def validate_original_key(dealer_id, object_key: str) -> str:
+def build_original_key(dealer_id, filename: str) -> str:
+    return build_scoped_original_key(resolve_scope(dealer_id=dealer_id), filename)
+
+
+def validate_scoped_original_key(scope: KnowledgeScope, object_key: str) -> str:
     key = str(object_key or "").strip().replace("\\", "/")
     path = PurePosixPath(key)
-    prefix = f"{settings.app_env}/dealers/{dealer_id}/original/"
+    prefix = f"{settings.app_env}/{scope.storage_prefix}/original/"
     if path.is_absolute() or ".." in path.parts or not key.startswith(prefix) or len(key) <= len(prefix):
-        raise ValueError("object key must be inside dealer original prefix")
+        owner = "dealer" if scope.scope_type == "dealer" else "authorized"
+        raise ValueError(f"object key must be inside {owner} original prefix")
     return key
 
 
-def build_derived_key(dealer_id, asset_version_id, filename: str) -> str:
+def validate_original_key(dealer_id, object_key: str) -> str:
+    return validate_scoped_original_key(resolve_scope(dealer_id=dealer_id), object_key)
+
+
+def build_scoped_derived_key(
+    scope: KnowledgeScope, asset_version_id, filename: str
+) -> str:
     name = PurePosixPath(str(filename).replace("\\", "/")).name
     if not name or name in {".", ".."}:
         raise ValueError("invalid derived filename")
-    return f"{settings.app_env}/dealers/{dealer_id}/derived/{asset_version_id}/{name}"
+    return f"{settings.app_env}/{scope.storage_prefix}/derived/{asset_version_id}/{name}"
+
+
+def build_derived_key(dealer_id, asset_version_id, filename: str) -> str:
+    return build_scoped_derived_key(
+        resolve_scope(dealer_id=dealer_id), asset_version_id, filename
+    )
 
 
 class OssStorage:

@@ -12,10 +12,11 @@ from app import db
 from app.config import settings
 from app.embeddings.text import get_text_embedder, vector_literal
 from app.knowledge import assets
+from app.knowledge.scopes import resolve_scope
 from app.processing.documents import CitedChunk, ExtractedDocument, extract_document
 from app.processing.redaction import redact_text
 from app.queue import celery_app
-from app.storage import build_derived_key, get_storage
+from app.storage import build_scoped_derived_key, get_storage
 
 
 PIPELINE_VERSION = "document-v2"
@@ -147,8 +148,14 @@ async def process_document_job(job_id, *, storage=None) -> dict:
             )
             extracted, redaction_count = _redact_document(extracted)
             artifact_bytes = extracted.markdown.encode("utf-8")
-            artifact_key = build_derived_key(
-                context["dealer_id"], context["asset_version_id"], "document-v2.md"
+            artifact_key = build_scoped_derived_key(
+                resolve_scope(
+                    dealer_id=context["dealer_id"],
+                    scope_type=context["scope_type"],
+                    scope_key=context["scope_key"],
+                ),
+                context["asset_version_id"],
+                "document-v2.md",
             )
             await asyncio.to_thread(
                 storage.put_object,

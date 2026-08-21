@@ -6,6 +6,7 @@ from uuid import UUID
 from app import db
 from app.ingestion.local_inbox import ingest_local_path
 from app.knowledge import assets, dealers
+from app.knowledge.scopes import resolve_scope
 
 
 async def _resolve_dealer(dealer_id: str | None, dealer_name: str | None) -> dict:
@@ -37,16 +38,28 @@ async def _resolve_dealer(dealer_id: str | None, dealer_name: str | None) -> dic
 
 
 async def run(args) -> int:
-    dealer = await _resolve_dealer(args.dealer_id, args.dealer)
+    dealer = None
+    if args.department:
+        scope = resolve_scope(scope_type="department", scope_key=args.department)
+    elif args.company:
+        scope = resolve_scope(scope_type="company")
+    else:
+        dealer = await _resolve_dealer(args.dealer_id, args.dealer)
+        scope = resolve_scope(dealer_id=dealer["id"])
     result = await ingest_local_path(
         args.path,
-        dealer_id=dealer["id"],
+        dealer_id=scope.dealer_id,
+        scope_type=scope.scope_type,
+        scope_key=scope.scope_key,
         category=args.category,
         sensitivity=args.sensitivity,
         actor_id=args.actor,
         language_code=args.language,
     )
-    print(f"dealer: {dealer['official_name']} ({dealer['id']})")
+    if dealer:
+        print(f"dealer: {dealer['official_name']} ({dealer['id']})")
+    else:
+        print(f"scope: {scope.scope_type}/{scope.scope_key}")
     for item in result["items"]:
         if item["status"] == "failed":
             detail = f" error={item['error']}"
@@ -63,9 +76,11 @@ async def run(args) -> int:
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Import local dealer files")
     parser.add_argument("--path", required=True, help="file or folder to import")
-    dealer_group = parser.add_mutually_exclusive_group(required=True)
-    dealer_group.add_argument("--dealer", help="exact dealer name")
-    dealer_group.add_argument("--dealer-id", help="dealer UUID")
+    scope_group = parser.add_mutually_exclusive_group(required=True)
+    scope_group.add_argument("--dealer", help="exact dealer name")
+    scope_group.add_argument("--dealer-id", help="dealer UUID")
+    scope_group.add_argument("--department", help="department key, such as overseas-sales")
+    scope_group.add_argument("--company", action="store_true", help="company-wide Vertu scope")
     parser.add_argument(
         "--category",
         choices=sorted(assets.CATEGORIES),

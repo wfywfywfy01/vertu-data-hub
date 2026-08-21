@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added dealer, department, and company knowledge scopes with scoped ingestion, storage, API authorization, retrieval, and backward-compatible migration.
 - Added guarded Chinese bigram fallback retrieval for compound dealer questions when strict full-text search returns no rows.
 - Fixed valid ISO dates being misclassified as phone numbers during redaction.
 - Added synchronous local dealer-file ingestion into the versioned searchable pipeline with managed originals and idempotent retries.

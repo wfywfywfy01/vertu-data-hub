@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import re
-from pathlib import PurePosixPath
 from uuid import UUID
 
 from psycopg.types.json import Jsonb
 
 from app import db
-from app.config import settings
 from app.knowledge.dealers import _audit, _required, normalize_name
+from app.knowledge.scopes import authorized_scope_sql, resolve_scope
+from app.storage import validate_scoped_original_key
 
 
 CATEGORIES = {
@@ -34,20 +34,11 @@ def _queue_for(content_type: str) -> str:
     return "documents"
 
 
-def _validate_object_key(dealer_id: UUID | str, object_key: str) -> str:
-    key = str(object_key or "").strip().replace("\\", "/")
-    path = PurePosixPath(key)
-    if path.is_absolute() or ".." in path.parts:
-        raise ValueError("object key must be inside dealer original prefix")
-    expected = f"{settings.app_env}/dealers/{dealer_id}/original/"
-    if not key.startswith(expected) or len(key) <= len(expected):
-        raise ValueError("object key must be inside dealer original prefix")
-    return key
-
-
 async def register_asset_version(
     *,
-    dealer_id: UUID | str,
+    dealer_id: UUID | str | None = None,
+    scope_type: str | None = None,
+    scope_key: str | None = None,
     logical_key: str,
     title: str,
     category: str,
@@ -64,6 +55,11 @@ async def register_asset_version(
     language_code: str | None = None,
     request_id: str | None = None,
 ) -> dict:
+    scope = resolve_scope(
+        dealer_id=dealer_id,
+        scope_type=scope_type,
+        scope_key=scope_key,
+    )
     logical = normalize_name(_required(logical_key, "logical_key", 300))
     if not logical:
         raise ValueError("logical_key has no searchable characters")
@@ -73,7 +69,7 @@ async def register_asset_version(
     original_name = _required(original_name, "original_name", 500)
     content_type = _required(content_type, "content_type", 160).lower()
     idempotency_key = _required(idempotency_key, "idempotency_key", 200)
-    object_key = _validate_object_key(dealer_id, object_key)
+    object_key = validate_scoped_original_key(scope, object_key)
     content_hash = str(content_hash or "").strip().lower()
     if not re.fullmatch(r"[0-9a-f]{64}", content_hash):
         raise ValueError("content_hash must be lowercase SHA-256")
@@ -83,45 +79,56 @@ async def register_asset_version(
         raise ValueError("unsupported sensitivity")
     if byte_size <= 0:
         raise ValueError("byte_size must be positive")
+    if scope.scope_type != "dealer" and store_id is not None:
+        raise ValueError("shared assets cannot belong to a dealer store")
 
     pool = await db.get_pool()
     async with pool.connection() as conn:
         async with conn.transaction():
             existing = await _job_bundle(conn, idempotency_key)
             if existing:
-                if str(existing["job"]["dealer_id"]) != str(dealer_id):
-                    raise ValueError("idempotency key belongs to another dealer")
+                if (
+                    existing["asset"]["scope_type"],
+                    existing["asset"]["scope_key"],
+                ) != (scope.scope_type, scope.scope_key):
+                    if existing["asset"]["scope_type"] == scope.scope_type == "dealer":
+                        raise ValueError("idempotency key belongs to another dealer")
+                    raise ValueError("idempotency key belongs to another knowledge scope")
                 existing["duplicate"] = True
                 return existing
 
-            cur = await conn.execute(
-                "SELECT id FROM dealer WHERE id = %s AND status IN ('draft','active')",
-                (dealer_id,),
-            )
-            if not await cur.fetchone():
-                raise ValueError("dealer is not active or draft")
+            if scope.dealer_id is not None:
+                cur = await conn.execute(
+                    "SELECT id FROM dealer WHERE id = %s AND status IN ('draft','active')",
+                    (scope.dealer_id,),
+                )
+                if not await cur.fetchone():
+                    raise ValueError("dealer is not active or draft")
 
             cur = await conn.execute(
                 """
                 INSERT INTO source_object
-                    (dealer_id, bucket, object_key, content_hash, original_name,
-                     content_type, byte_size, uploaded_by)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (dealer_id, content_hash) DO UPDATE
-                    SET dealer_id = EXCLUDED.dealer_id
+                    (dealer_id, scope_type, scope_key, bucket, object_key, content_hash,
+                     original_name, content_type, byte_size, uploaded_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (scope_type, scope_key, content_hash) DO UPDATE
+                    SET scope_key = EXCLUDED.scope_key
                 RETURNING *
                 """,
-                (dealer_id, bucket, object_key, content_hash, original_name,
-                 content_type, byte_size, actor),
+                (
+                    scope.dealer_id, scope.scope_type, scope.scope_key, bucket, object_key,
+                    content_hash, original_name, content_type, byte_size, actor,
+                ),
             )
             source = await cur.fetchone()
 
             cur = await conn.execute(
                 """
                 INSERT INTO knowledge_asset
-                    (dealer_id, store_id, logical_key, title, category, sensitivity, created_by)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (dealer_id, logical_key) DO UPDATE SET
+                    (dealer_id, scope_type, scope_key, store_id, logical_key, title,
+                     category, sensitivity, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (scope_type, scope_key, logical_key) DO UPDATE SET
                     store_id = EXCLUDED.store_id,
                     title = EXCLUDED.title,
                     category = EXCLUDED.category,
@@ -129,7 +136,10 @@ async def register_asset_version(
                     updated_at = now()
                 RETURNING *
                 """,
-                (dealer_id, store_id, logical, title, category, sensitivity, actor),
+                (
+                    scope.dealer_id, scope.scope_type, scope.scope_key, store_id, logical,
+                    title, category, sensitivity, actor,
+                ),
             )
             asset = await cur.fetchone()
 
@@ -183,7 +193,7 @@ async def register_asset_version(
                 RETURNING *
                 """,
                 (
-                    dealer_id, version["id"], _queue_for(content_type), job_status,
+                    scope.dealer_id, version["id"], _queue_for(content_type), job_status,
                     100 if duplicate_content else 0, idempotency_key,
                     Jsonb({"source_object_id": str(source["id"])}),
                     Jsonb({"duplicate_content": duplicate_content}), job_status,
@@ -192,7 +202,12 @@ async def register_asset_version(
             job = await cur.fetchone()
             await _audit(
                 conn, actor, "asset.version_registered", "knowledge_asset", asset["id"],
-                {"version_id": str(version["id"]), "duplicate_content": duplicate_content},
+                {
+                    "version_id": str(version["id"]),
+                    "duplicate_content": duplicate_content,
+                    "scope_type": scope.scope_type,
+                    "scope_key": scope.scope_key,
+                },
                 request_id,
             )
             cur = await conn.execute("SELECT * FROM knowledge_asset WHERE id = %s", (asset["id"],))
@@ -207,16 +222,12 @@ async def register_asset_version(
 async def get_asset(
     asset_id: UUID | str,
     dealer_ids: list[UUID | str] | None = None,
+    team_keys: list[str] | None = None,
 ) -> dict | None:
-    scoped_ids = None if dealer_ids is None else list(dealer_ids)
-    if scoped_ids == []:
-        return None
+    authorized, params = authorized_scope_sql("a", dealer_ids, team_keys)
     asset = await db.fetch_one(
-        """
-        SELECT * FROM knowledge_asset
-        WHERE id = %s AND (%s::uuid[] IS NULL OR dealer_id = ANY(%s::uuid[]))
-        """,
-        (asset_id, scoped_ids, scoped_ids),
+        f"SELECT a.* FROM knowledge_asset a WHERE a.id = %s AND {authorized}",
+        [asset_id, *params],
     )
     if not asset:
         return None
@@ -230,24 +241,21 @@ async def get_asset(
 async def list_assets(
     dealer_ids: list[UUID | str] | None = None,
     *,
+    team_keys: list[str] | None = None,
     dealer_id: UUID | str | None = None,
     limit: int = 100,
 ) -> list[dict]:
     if not 1 <= limit <= 100:
         raise ValueError("limit must be between 1 and 100")
-    conditions = ["status <> 'deleted'"]
-    params: list = []
+    authorized, params = authorized_scope_sql("a", dealer_ids, team_keys)
+    conditions = ["a.status <> 'deleted'", authorized]
     if dealer_id is not None:
-        conditions.append("dealer_id = %s")
+        conditions.append("(a.scope_type <> 'dealer' OR a.dealer_id = %s)")
         params.append(dealer_id)
-    elif dealer_ids is not None:
-        if not dealer_ids:
-            return []
-        conditions.append("dealer_id = ANY(%s)")
-        params.append(dealer_ids)
     params.append(limit)
     return await db.fetch_all(
-        f"SELECT * FROM knowledge_asset WHERE {' AND '.join(conditions)} ORDER BY updated_at DESC LIMIT %s",
+        f"SELECT a.* FROM knowledge_asset a WHERE {' AND '.join(conditions)} "
+        "ORDER BY a.updated_at DESC LIMIT %s",
         params,
     )
 
@@ -255,16 +263,18 @@ async def list_assets(
 async def get_job(
     job_id: UUID | str,
     dealer_ids: list[UUID | str] | None = None,
+    team_keys: list[str] | None = None,
 ) -> dict | None:
-    scoped_ids = None if dealer_ids is None else list(dealer_ids)
-    if scoped_ids == []:
-        return None
+    authorized, params = authorized_scope_sql("a", dealer_ids, team_keys)
     return await db.fetch_one(
-        """
-        SELECT * FROM processing_job
-        WHERE id = %s AND (%s::uuid[] IS NULL OR dealer_id = ANY(%s::uuid[]))
+        f"""
+        SELECT j.*
+        FROM processing_job j
+        JOIN asset_version v ON v.id = j.asset_version_id
+        JOIN knowledge_asset a ON a.id = v.asset_id
+        WHERE j.id = %s AND {authorized}
         """,
-        (job_id, scoped_ids, scoped_ids),
+        [job_id, *params],
     )
 
 
@@ -361,6 +371,8 @@ async def get_job_context(job_id: UUID | str) -> dict | None:
             a.title AS asset_title,
             a.category,
             a.sensitivity,
+            a.scope_type,
+            a.scope_key,
             s.bucket,
             s.object_key,
             s.content_hash,

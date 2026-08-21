@@ -10,9 +10,11 @@
 
 ## 决策
 
-- 使用一个私有 OSS bucket，并按环境和经销商分区：
+- 使用一个私有 OSS bucket，并按环境和资料范围分区：
   - `<env>/dealers/<dealer_id>/original/`
   - `<env>/dealers/<dealer_id>/derived/`
+  - `<env>/departments/<team_key>/original|derived/`
+  - `<env>/companies/vertu/original|derived/`
   - `<env>/quarantine/`
   - `<env>/exports/`
 - 原文件只追加，不覆盖；数据库保存对象键、哈希、大小、媒体类型和版本关系。

@@ -14,9 +14,10 @@ from app.config import settings
 from app.embeddings.image import HashImageEmbedder, get_image_embedder
 from app.embeddings.text import get_text_embedder, vector_literal
 from app.knowledge import assets
+from app.knowledge.scopes import resolve_scope
 from app.processing.images import ImageExtraction, extract_image
 from app.processing.redaction import redact_text
-from app.storage import build_derived_key, get_storage
+from app.storage import build_scoped_derived_key, get_storage
 
 
 PIPELINE_VERSION = "image-v1"
@@ -199,8 +200,14 @@ async def process_image_job(job_id, *, storage=None) -> dict:
         artifact_size = None
         if extracted.text:
             artifact = extracted.text.encode("utf-8")
-            artifact_key = build_derived_key(
-                context["dealer_id"], context["asset_version_id"], "ocr-image-v1.md"
+            artifact_key = build_scoped_derived_key(
+                resolve_scope(
+                    dealer_id=context["dealer_id"],
+                    scope_type=context["scope_type"],
+                    scope_key=context["scope_key"],
+                ),
+                context["asset_version_id"],
+                "ocr-image-v1.md",
             )
             await asyncio.to_thread(
                 storage.put_object, artifact_key, artifact, content_type="text/markdown"

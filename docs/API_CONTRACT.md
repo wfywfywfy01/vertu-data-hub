@@ -3,7 +3,7 @@
 ## 调用规则
 
 - 基础路径：`/v1`；仅允许 PDCA 后端和运维服务通过私网访问。
-- PDCA 服务令牌必须包含：`iss`、`aud`、`sub`、`user_id`、`role`、`scope`、`dealer_ids`、`iat`、`exp`、`jti`。
+- PDCA 服务令牌必须包含：`iss`、`aud`、`sub`、`user_id`、`role`、`scope`、`dealer_ids`、`iat`、`exp`、`jti`；部门成员增加可选 `team_keys`。
 - 令牌有效期不超过 5 分钟。知识库校验签名、受众、过期时间，并把 `dealer_ids` 作为上限再次授权。
 - 每个写请求携带 `Idempotency-Key`，每个请求携带 `X-Request-ID`。
 - 列表使用不透明 cursor；错误返回稳定 `code`、安全 `message` 和 `request_id`，不得返回密钥、SQL 或原始敏感内容。
@@ -26,10 +26,14 @@
 | `POST` | `/v1/exports` | 管理员创建受审计的敏感导出任务 |
 | `GET` | `/v1/jobs/{job_id}` | 查询上传、处理或导出进度 |
 
+上传请求使用 `scope_type=dealer|department|company`。经销商范围传 `dealer_id`；
+部门范围传稳定 `scope_key`；公司范围固定为 `vertu`。普通销售只能写授权经销商，
+部门公用资料仅匹配 `team_keys` 的经理或管理员可写，公司公用资料仅管理员可写。
+
 ### 混合检索
 
 `POST /v1/search` 接受 `query`、可选 `dealer_id`、可选 `category` 和 `top_k`
-（1-20）。服务端在全文和向量两路 SQL 中分别强制经销商范围、当前资产版本和
+（1-20）。服务端在全文和向量两路 SQL 中分别强制授权经销商、部门、公司范围、当前资产版本和
 `searchable` 状态，再用 RRF 融合。响应片段及标题、文件名会再次脱敏；引用包含
 资产 ID、版本 ID/编号和页码。审计只保存查询 SHA-256、命中数和资产 ID，不保存
 原始查询。
@@ -68,7 +72,8 @@
 | `admin` | 全部 | 主表最终确认、合并、停用、敏感导出和审计 |
 | `viewer/dealer` | 无或显式分配 | 仅脱敏读取；默认不开放上传和确认 |
 
-服务端必须对路径对象、请求体中的 `dealer_id` 和检索结果分别校验，不能依赖前端隐藏按钮。
+服务端必须对路径对象、请求体中的资料范围和检索结果分别校验，不能依赖前端隐藏按钮。
+查询自动合并授权经销商资料、调用者 `team_keys` 对应部门资料和公司公用资料。
 
 ## 状态与分类
 

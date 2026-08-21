@@ -8,6 +8,7 @@ from uuid import UUID
 
 from app.config import settings
 from app.knowledge import assets
+from app.knowledge.scopes import resolve_scope
 from app.storage import (
     DOCUMENT_EXTENSIONS,
     IMAGE_EXTENSIONS,
@@ -73,7 +74,9 @@ async def _process_job(job: dict, storage: LocalStorage) -> dict:
 async def ingest_local_path(
     path,
     *,
-    dealer_id: UUID,
+    dealer_id: UUID | None = None,
+    scope_type: str | None = None,
+    scope_key: str | None = None,
     category: str = "unclassified",
     sensitivity: str = "confidential",
     actor_id: str = "local-admin",
@@ -84,6 +87,11 @@ async def ingest_local_path(
         raise ValueError("unsupported category")
     if sensitivity not in assets.SENSITIVITIES:
         raise ValueError("unsupported sensitivity")
+    scope = resolve_scope(
+        dealer_id=dealer_id,
+        scope_type=scope_type,
+        scope_key=scope_key,
+    )
     source = Path(path).resolve()
     storage = storage or LocalStorage()
     files = _source_files(source, storage.root)
@@ -107,7 +115,7 @@ async def ingest_local_path(
             byte_size = file_path.stat().st_size
             validate_upload(file_path.name, content_type, byte_size, content_hash)
             object_key = (
-                f"{settings.app_env}/dealers/{dealer_id}/original/local/"
+                f"{settings.app_env}/{scope.storage_prefix}/original/local/"
                 f"{content_hash[:32]}{extension}"
             )
             storage.import_file(object_key, file_path, content_hash=content_hash)
@@ -115,7 +123,9 @@ async def ingest_local_path(
                 relative_name.casefold().encode("utf-8")
             ).hexdigest()[:24]
             registered = await assets.register_asset_version(
-                dealer_id=dealer_id,
+                dealer_id=scope.dealer_id,
+                scope_type=scope.scope_type,
+                scope_key=scope.scope_key,
                 logical_key=_logical_key(relative_name),
                 title=file_path.stem,
                 category=category,
@@ -127,7 +137,10 @@ async def ingest_local_path(
                 content_type=content_type,
                 byte_size=byte_size,
                 actor_id=actor_id,
-                idempotency_key=f"local:{dealer_id}:{relative_hash}:{content_hash}",
+                idempotency_key=(
+                    f"local:{scope.scope_type}:{scope.scope_key}:"
+                    f"{relative_hash}:{content_hash}"
+                ),
                 language_code=language_code,
             )
             result = await _process_job(registered["job"], storage)

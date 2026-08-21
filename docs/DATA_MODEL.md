@@ -17,7 +17,7 @@
 | 表 | 关键内容 |
 |---|---|
 | `source_object` | OSS bucket/key、内容哈希、大小、媒体类型、上传者 |
-| `knowledge_asset` | 经销商、门店、类别、敏感等级、当前版本、生命周期状态 |
+| `knowledge_asset` | 范围类型/键、可选经销商/门店、类别、敏感等级、生命周期状态 |
 | `asset_version` | 不可变版本号、源对象、前一版本、语言、有效时间 |
 | `derived_artifact` | 文本、OCR、转写、关键帧或摘要的位置与流水线版本 |
 | `content_chunk` | 可引用文本、页码/时间戳、全文索引字段 |
@@ -25,6 +25,8 @@
 | `image_embedding` | 图片向量、尺寸、真实格式、OCR 语言/行数/置信度和流水线版本 |
 
 `source_object.content_hash` 用于完全去重；逻辑版本由人工选择或规则识别，不因同名文件自动覆盖。
+`scope_type + scope_key` 是资料所有权边界：经销商键为 UUID，部门键为 PDCA
+稳定 `team_key`，公司键固定为 `vertu`。共享资料的 `dealer_id` 必须为空。
 
 ## 处理、确认和审计
 

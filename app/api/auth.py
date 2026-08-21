@@ -10,6 +10,7 @@ import jwt
 
 from app.api.errors import ApiError
 from app.config import settings
+from app.knowledge.scopes import KnowledgeScope, normalize_scope_key
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,7 @@ class ServiceClaims:
     role: str
     scope: str
     dealer_ids: frozenset[UUID]
+    team_keys: frozenset[str]
 
     @property
     def unrestricted(self) -> bool:
@@ -26,6 +28,19 @@ class ServiceClaims:
     def require_dealer(self, dealer_id: UUID) -> None:
         if not self.unrestricted and dealer_id not in self.dealer_ids:
             raise ApiError(403, "dealer_scope_denied", "Dealer is outside the caller scope")
+
+    def require_knowledge_scope(self, knowledge_scope: KnowledgeScope) -> None:
+        if self.unrestricted or knowledge_scope.scope_type == "company":
+            return
+        if knowledge_scope.scope_type == "dealer":
+            self.require_dealer(knowledge_scope.dealer_id)
+            return
+        if knowledge_scope.scope_key not in self.team_keys:
+            raise ApiError(
+                403,
+                "department_scope_denied",
+                "Department is outside the caller scope",
+            )
 
     def require_role(self, *roles: str) -> None:
         if self.role not in roles:
@@ -68,6 +83,10 @@ async def require_service_claims(authorization: str = Header(default="")) -> Ser
         if scope == "all" and role != "admin":
             raise ValueError("all scope requires admin")
         dealer_ids = frozenset(UUID(str(value)) for value in payload["dealer_ids"])
+        raw_team_keys = payload.get("team_keys", [])
+        if not isinstance(raw_team_keys, list):
+            raise ValueError("team_keys must be a list")
+        team_keys = frozenset(normalize_scope_key(value) for value in raw_team_keys)
     except (jwt.PyJWTError, KeyError, TypeError, ValueError):
         raise ApiError(401, "invalid_service_token", "Service token is invalid or expired")
     return ServiceClaims(
@@ -75,5 +94,6 @@ async def require_service_claims(authorization: str = Header(default="")) -> Ser
         role=role,
         scope=scope,
         dealer_ids=dealer_ids,
+        team_keys=team_keys,
     )
 
