@@ -86,3 +86,47 @@ async def test_local_search_is_dealer_scoped_and_cited(monkeypatch):
     assert captured["dealer_ids"] == [dealer_id]
     assert captured["dealer_id"] == dealer_id
     assert captured["actor_id"] == "local-pilot-ui"
+
+
+def test_local_image_content_serves_managed_searchable_asset(monkeypatch, tmp_path):
+    asset_id = uuid4()
+    image = tmp_path / "event.jpg"
+    image.write_bytes(b"test-image")
+
+    async def fetch_one(*_args, **_kwargs):
+        return {
+            "status": "searchable",
+            "bucket": "local-inbox",
+            "object_key": "development/dealer/test/original/local/event.jpg",
+            "content_type": "image/jpeg",
+        }
+
+    class Storage:
+        def get_file_path(self, _key):
+            return image
+
+    monkeypatch.setattr(local_ui.db, "fetch_one", fetch_one)
+    monkeypatch.setattr(local_ui, "LocalStorage", Storage)
+
+    response = TestClient(app).get(f"/ui/api/assets/{asset_id}/content")
+
+    assert response.status_code == 200
+    assert response.content == b"test-image"
+    assert response.headers["content-type"] == "image/jpeg"
+    assert response.headers["cache-control"] == "private, max-age=300"
+
+
+def test_local_image_content_rejects_non_image(monkeypatch):
+    async def fetch_one(*_args, **_kwargs):
+        return {
+            "status": "searchable",
+            "bucket": "local-inbox",
+            "object_key": "development/dealer/test/original/local/report.pdf",
+            "content_type": "application/pdf",
+        }
+
+    monkeypatch.setattr(local_ui.db, "fetch_one", fetch_one)
+
+    response = TestClient(app).get(f"/ui/api/assets/{uuid4()}/content")
+
+    assert response.status_code == 404

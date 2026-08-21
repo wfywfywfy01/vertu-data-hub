@@ -82,6 +82,12 @@ class LocalStorage:
             raise ObjectNotFoundError(key)
         return source.read_bytes()
 
+    def get_file_path(self, key: str) -> Path:
+        source = self._target(key)
+        if not source.is_file():
+            raise ObjectNotFoundError(key)
+        return source
+
     def put_object(self, key: str, data: bytes, *, content_type: str) -> None:
         del content_type
         target = self._target(key)

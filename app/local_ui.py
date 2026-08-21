@@ -13,6 +13,7 @@ from app import db
 from app.config import settings
 from app.knowledge import assets, dealers
 from app.retrieval.knowledge_search import search_knowledge
+from app.storage import LocalStorage, ObjectNotFoundError
 
 
 router = APIRouter(include_in_schema=False)
@@ -102,3 +103,34 @@ async def local_search(body: LocalSearchRequest, request: Request):
             "official_name": dealer[0]["official_name"],
         },
     }
+
+
+@router.get("/ui/api/assets/{asset_id}/content")
+async def local_asset_content(asset_id: UUID, request: Request):
+    _require_local(request)
+    row = await db.fetch_one(
+        """
+        SELECT a.status, s.bucket, s.object_key, s.content_type
+        FROM knowledge_asset a
+        JOIN asset_version v ON v.asset_id = a.id AND v.is_current
+        JOIN source_object s ON s.id = v.source_object_id
+        WHERE a.id = %s
+        """,
+        (asset_id,),
+    )
+    if (
+        not row
+        or row["status"] != "searchable"
+        or row["bucket"] != "local-inbox"
+        or not row["content_type"].startswith("image/")
+    ):
+        raise HTTPException(status_code=404, detail="图片不存在")
+    try:
+        path = LocalStorage().get_file_path(row["object_key"])
+    except (ObjectNotFoundError, ValueError):
+        raise HTTPException(status_code=404, detail="图片不存在") from None
+    return FileResponse(
+        path,
+        media_type=row["content_type"],
+        headers={"Cache-Control": "private, max-age=300"},
+    )

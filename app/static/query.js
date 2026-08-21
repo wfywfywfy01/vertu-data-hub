@@ -30,6 +30,8 @@ const sensitivityLabels = {
   restricted: "受限",
 };
 
+const browserImagePattern = /\.(?:jpe?g|png|webp)$/i;
+
 function setNotice(message, state = "") {
   notice.textContent = message;
   notice.className = `notice ${state}`.trim();
@@ -67,6 +69,10 @@ function renderResults(items) {
   items.forEach((row, index) => {
     const fragment = template.content.cloneNode(true);
     const citation = row.citation || {};
+    const item = fragment.querySelector(".result-item");
+    const preview = fragment.querySelector(".result-preview");
+    const image = fragment.querySelector(".result-image");
+    const previewUrl = `/ui/api/assets/${encodeURIComponent(row.asset_id)}/content`;
     fragment.querySelector(".result-index").textContent = String(index + 1).padStart(2, "0");
     fragment.querySelector(".result-title").textContent = citation.title || citation.original_name || "未命名资料";
     const score = fragment.querySelector(".result-score");
@@ -77,6 +83,18 @@ function renderResults(items) {
     fragment.querySelector(".citation-version").textContent = `v${citation.version_number || 1}`;
     fragment.querySelector(".citation-category").textContent = categoryLabels[row.category] || row.category;
     fragment.querySelector(".citation-sensitivity").textContent = sensitivityLabels[row.sensitivity] || row.sensitivity;
+    if (row.asset_id && browserImagePattern.test(citation.original_name || "")) {
+      preview.href = previewUrl;
+      image.src = previewUrl;
+      image.alt = `${citation.title || citation.original_name} 图片预览`;
+      image.addEventListener("error", () => {
+        preview.remove();
+        item.classList.add("no-preview");
+      }, { once: true });
+    } else {
+      preview.remove();
+      item.classList.add("no-preview");
+    }
     resultsList.append(fragment);
   });
   resultCount.textContent = `${items.length} 条相关片段`;
