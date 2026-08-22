@@ -75,6 +75,7 @@ jobs:
         run: |
           docker run --detach --rm --name data-hub-smoke \
             --env APP_ENV=development \
+            --env API_HOST=0.0.0.0 \
             --env SEMANTIC_IMAGE_PRELOAD=false \
             --publish 127.0.0.1:8080:8080 \
             "vertu-data-hub:${{ github.sha }}"
