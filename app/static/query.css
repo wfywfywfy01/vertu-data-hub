@@ -232,6 +232,17 @@ select:disabled { cursor: wait; color: var(--muted); background: #e6eaed; }
 .result-score.low { color: var(--muted); }
 .result-text { margin: 10px 0 14px; color: #37434e; white-space: pre-wrap; overflow-wrap: anywhere; }
 
+.result-caption {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  background: #fff;
+  border-left: 3px solid var(--accent);
+}
+
+.result-caption strong { display: block; font-size: 12px; }
+.result-caption p { margin: 4px 0; color: #37434e; }
+.result-caption span { color: var(--muted); font-size: 11px; }
+
 .citation { margin: 0; display: flex; flex-wrap: wrap; gap: 7px 18px; color: var(--muted); font-size: 12px; }
 .citation div { display: flex; min-width: 0; gap: 5px; }
 .citation dt { font-weight: 700; }

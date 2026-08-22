@@ -50,6 +50,9 @@ function setSearching(active) {
 }
 
 function formatScore(row) {
+  if (row.retrieval_kind === "image_semantic") {
+    return `画面匹配 ${Math.round(row.semantic_similarity * 100)}%`;
+  }
   if (row.lexical_score !== null) return "关键词命中";
   if (row.semantic_similarity !== null) {
     const percentage = Math.round(row.semantic_similarity * 100);
@@ -77,8 +80,15 @@ function renderResults(items) {
     fragment.querySelector(".result-title").textContent = citation.title || citation.original_name || "未命名资料";
     const score = fragment.querySelector(".result-score");
     score.textContent = formatScore(row);
-    if (row.lexical_score === null && row.semantic_similarity < 0.35) score.classList.add("low");
+    if (row.retrieval_kind !== "image_semantic" && row.lexical_score === null && row.semantic_similarity < 0.35) {
+      score.classList.add("low");
+    }
     fragment.querySelector(".result-text").textContent = excerpt(row.text);
+    const caption = fragment.querySelector(".result-caption");
+    if (row.suggested_caption) {
+      caption.hidden = false;
+      caption.querySelector("p").textContent = row.suggested_caption;
+    }
     fragment.querySelector(".citation-file").textContent = citation.original_name || "-";
     fragment.querySelector(".citation-version").textContent = `v${citation.version_number || 1}`;
     fragment.querySelector(".citation-category").textContent = categoryLabels[row.category] || row.category;
@@ -97,7 +107,8 @@ function renderResults(items) {
     }
     resultsList.append(fragment);
   });
-  resultCount.textContent = `${items.length} 条相关片段`;
+  const imageMode = items[0]?.retrieval_kind === "image_semantic";
+  resultCount.textContent = imageMode ? `${items.length} 张推荐图片` : `${items.length} 条相关片段`;
   resultsSection.hidden = false;
 }
 
@@ -149,7 +160,7 @@ form.addEventListener("submit", async (event) => {
 
   setSearching(true);
   resultsSection.hidden = true;
-  setNotice("正在检索已处理资料并生成引用...", "loading");
+  setNotice("正在理解问题并检索已处理资料...", "loading");
   try {
     const response = await fetch("/ui/api/search", {
       method: "POST",
@@ -168,7 +179,10 @@ form.addEventListener("submit", async (event) => {
       return;
     }
     renderResults(data.items);
-    setNotice(`已在 ${data.dealer.official_name} 范围内完成检索。`);
+    const detail = data.mode === "image_semantic"
+      ? "已按画面内容和图片质量排序，配文为待确认草稿。"
+      : "已完成文字证据检索。";
+    setNotice(`已在 ${data.dealer.official_name} 范围内完成检索。${detail}`);
   } catch (error) {
     setNotice(errorMessage(error), "error");
   } finally {

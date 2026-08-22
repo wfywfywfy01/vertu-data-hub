@@ -26,10 +26,9 @@ EMBEDDING_PROVIDER=api
 EMBEDDING_BASE_URL=<openai_compatible_url>
 EMBEDDING_API_KEY=<key>
 EMBEDDING_MODEL=text-embedding-v3
-IMAGE_EMBEDDING_PROVIDER=api
-IMAGE_EMBEDDING_BASE_URL=<multimodal_embedding_url>
-IMAGE_EMBEDDING_API_KEY=<key>
-IMAGE_EMBEDDING_MODEL=multimodal-embedding-v1
+IMAGE_EMBEDDING_PROVIDER=hash
+ALLOW_EXTERNAL_IMAGE_PROCESSING=false
+SEMANTIC_IMAGE_BATCH_SIZE=4
 ```
 
 ## 2. Upload Pilot Files
@@ -54,6 +53,7 @@ python -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
 python scripts/init_db.py
+python -m app.cli.preload_semantic_images
 python -m app.cli.register_source
 python -m app.cli.sync_oss --all
 ```
@@ -73,6 +73,7 @@ SELECT status, items_processed, error, finished_at
 FROM ingestion_run ORDER BY id DESC LIMIT 20;
 SELECT count(*) FROM doc_chunk;
 SELECT count(*) FROM media_asset;
+SELECT count(*) FROM image_embedding WHERE semantic_embedding IS NOT NULL;
 SELECT count(*) FROM structured_record;
 ```
 

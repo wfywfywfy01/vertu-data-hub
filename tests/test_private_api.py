@@ -574,6 +574,36 @@ async def test_search_with_empty_scope_returns_no_results(client, search_records
     assert response.json() == {"items": [], "count": 0}
 
 
+async def test_image_search_uses_same_private_scope(client, api_dealer, monkeypatch):
+    from app.api import routes
+
+    captured = {}
+
+    async def search_assets(query, **kwargs):
+        captured.update(query=query, **kwargs)
+        return [{
+            "asset_id": uuid.uuid4(),
+            "retrieval_kind": "image_semantic",
+            "citation": {"original_name": "event.jpg"},
+        }]
+
+    monkeypatch.setattr(routes, "search_assets", search_assets)
+    response = await client.post(
+        "/v1/search",
+        headers={"Authorization": f"Bearer {_token(dealer_ids=[api_dealer['id']])}"},
+        json={
+            "query": "发布会照片",
+            "dealer_id": str(api_dealer["id"]),
+            "category": "media",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["retrieval_kind"] == "image_semantic"
+    assert captured["dealer_ids"] == [api_dealer["id"]]
+    assert captured["dealer_id"] == api_dealer["id"]
+
+
 async def test_answer_with_empty_scope_refuses_without_calling_model(client, search_records):
     request_id = f"pytest-answer-{uuid.uuid4()}"
     query = "inventory"

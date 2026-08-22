@@ -61,7 +61,7 @@ async def test_local_search_is_dealer_scoped_and_cited(monkeypatch):
             "status": "active",
         }]
 
-    async def search_knowledge(query, **kwargs):
+    async def search_assets(query, **kwargs):
         captured.update(query=query, **kwargs)
         return [{
             "text": "VERTU event",
@@ -74,7 +74,7 @@ async def test_local_search_is_dealer_scoped_and_cited(monkeypatch):
         }]
 
     monkeypatch.setattr(local_ui.dealers, "list_dealers", list_dealers)
-    monkeypatch.setattr(local_ui, "search_knowledge", search_knowledge)
+    monkeypatch.setattr(local_ui, "search_assets", search_assets)
 
     response = TestClient(app).post(
         "/ui/api/search",

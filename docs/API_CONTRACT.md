@@ -38,6 +38,13 @@
 资产 ID、版本 ID/编号和页码。审计只保存查询 SHA-256、命中数和资产 ID，不保存
 原始查询。
 
+图片分类或查询包含图片、照片、合影、社媒等视觉意图时，同一接口改用本地
+Chinese-CLIP 图文向量检索。授权范围、当前版本、`searchable` 状态和经销商过滤
+与文字检索一致。图片结果增加 `retrieval_kind=image_semantic`、
+`semantic_similarity`、`quality_score`、`semantic_labels` 和
+`suggested_caption`；配文只作为发布前人工确认的草稿。模型在私有 worker 内运行，
+原图不发送给 OpenRouter 或外部图片 API。没有图片语义索引时自动回退文字检索。
+
 ### 有引用回答
 
 `POST /v1/answers` 接受与检索相同的 `query`、可选 `dealer_id`、可选 `category`

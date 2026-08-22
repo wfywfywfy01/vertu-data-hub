@@ -13,6 +13,7 @@ python -m venv .venv
 copy .env.example .env                   # 按需改 embedding key 等
 python scripts/init_db.py                # 建表（幂等）
 python -m app.cli.preload_ocr             # 联网构建阶段预热 OCR 模型
+python -m app.cli.preload_semantic_images # 联网构建阶段预热本地图文模型
 python run_api.py                         # 私有 API（默认 127.0.0.1:8080）
 celery -A app.queue:celery_app worker -Q documents,images --pool=solo  # Windows worker
 ```
@@ -35,10 +36,21 @@ CSV/TXT/Markdown 文档解析、分块、向量化和页码引用。图片与扫
 音视频 worker 尚未交付。
 
 图片 worker 支持 PNG/JPEG/WebP/HEIC 的真实格式校验、本地 OCR、检索前脱敏和
-图片向量；扫描 PDF 在没有数字文本时自动 OCR。默认不向第三方发送原图。只有显式
+图片向量；扫描 PDF 在没有数字文本时自动 OCR。图片同时使用固定版本的本地
+Chinese-CLIP 生成 512 维语义向量、画面标签和质量分，用于中文文字搜图。默认不向第三方发送原图。只有显式
 设置 `ALLOW_EXTERNAL_IMAGE_PROCESSING=true`，且资料敏感级别为 `internal`，才会
 调用云图片 embedding；`confidential/restricted` 始终本地处理。Arabic/Persian 和
 Russian OCR 模型应在联网构建环境预热后再部署到离线生产 worker。
+
+本地导入会自动补齐当前范围内尚未建立的图片语义索引。存量资料可显式执行：
+
+```powershell
+python -m app.cli.index_semantic_images --dealer "VMG Communication and Technology Joint Stock Company"
+```
+
+`POST /v1/search` 和本机 `/ui/api/search` 遇到图片分类或图片意图时自动切换到
+本地图文检索，返回画面匹配度、质量分、标签、原图引用及待人工确认的社媒配文草稿；
+没有语义索引时回退到原文字检索。
 
 `POST /v1/search` 已提供经销商权限内的全文 + 向量混合检索。请求体示例：
 

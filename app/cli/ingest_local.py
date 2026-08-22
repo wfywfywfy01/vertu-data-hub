@@ -7,6 +7,7 @@ from app import db
 from app.ingestion.local_inbox import ingest_local_path
 from app.knowledge import assets, dealers
 from app.knowledge.scopes import resolve_scope
+from app.semantic_images import index_semantic_images
 
 
 async def _resolve_dealer(dealer_id: str | None, dealer_name: str | None) -> dict:
@@ -66,9 +67,13 @@ async def run(args) -> int:
         else:
             detail = f" version={item['version']}"
         print(f"[{item['status']}] {item['file']}{detail}")
+    semantic_count = await index_semantic_images(
+        scope_type=scope.scope_type,
+        scope_key=scope.scope_key,
+    )
     print(
         f"summary: succeeded={result['succeeded']} unchanged={result['unchanged']} "
-        f"failed={result['failed']}"
+        f"failed={result['failed']} semantic_images={semantic_count}"
     )
     return 1 if result["failed"] else 0
 

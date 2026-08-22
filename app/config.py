@@ -34,6 +34,9 @@ class Settings:
         "ALLOW_EXTERNAL_IMAGE_PROCESSING", "false"
     ).lower() in {"1", "true", "yes"}
 
+    # 本地中文图文语义检索。模型版本在实现中固定，原图不离开本机/私有部署环境。
+    semantic_image_batch_size: int = int(_env("SEMANTIC_IMAGE_BATCH_SIZE", "4"))
+
     # 有引用回答。默认禁用外发，显式开启后只发送脱敏 internal 证据。
     answer_provider: str = _env("ANSWER_PROVIDER", "disabled").lower()
     allow_external_text_generation: bool = _env(
@@ -80,6 +83,8 @@ def validate_production_settings(value: Settings = settings) -> None:
     signed_seconds = getattr(value, "oss_signed_url_seconds", 900)
     if not 60 <= signed_seconds <= 3600:
         raise RuntimeError("OSS_SIGNED_URL_SECONDS must be between 60 and 3600")
+    if not 1 <= getattr(value, "semantic_image_batch_size", 4) <= 32:
+        raise RuntimeError("SEMANTIC_IMAGE_BATCH_SIZE must be between 1 and 32")
     if value.app_env != "production":
         return
 

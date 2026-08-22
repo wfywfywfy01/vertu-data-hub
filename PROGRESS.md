@@ -209,3 +209,26 @@ Record command, commit, result, and environment here after each milestone.
 Do not mark a production milestone complete from unit tests alone; verify the
 database extension, ingestion, retrieval, and rollback path in the target
 environment.
+
+## 2026-08-22: local semantic image retrieval
+
+- Added pinned `OFA-Sys/chinese-clip-vit-base-patch16` local inference using
+  safetensors weights; confidential originals never leave the private runtime.
+- Added 512-dimension semantic vectors, quality scores, visual labels, automatic
+  worker indexing, idempotent backfill CLI, dealer-scoped retrieval, audit hashes,
+  and text-search fallback.
+- Routed both `/v1/search` and the loopback UI through the same image-intent logic.
+- Added real image previews, visual scores, recommendation reasons, and caption
+  drafts marked for human confirmation.
+
+Acceptance evidence:
+
+- `python -m pytest -q`: 84 passed.
+- `python -m compileall -q app scripts tests`: passed.
+- `docker compose config --quiet`: passed.
+- `python scripts/init_db.py`: repeatable migration passed.
+- VMG: 52 searchable images, 52 semantic vectors.
+- Real social-media query top four: `image12.png`, `image14.png`, `image09.png`,
+  `image08.png`; all four visually inspected as clear model/product event images.
+- Playwright desktop and 390x844 mobile: no horizontal overflow, 8/8 previews
+  loaded, zero console errors, search and image requests returned HTTP 200.

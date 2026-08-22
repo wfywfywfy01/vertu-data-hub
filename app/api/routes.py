@@ -17,7 +17,7 @@ from app.config import settings
 from app.knowledge import assets, dealers
 from app.knowledge.scopes import KnowledgeScope, resolve_scope
 from app.queue import enqueue_processing_job
-from app.retrieval.knowledge_search import search_knowledge
+from app.retrieval.search import search_assets
 from app.storage import (
     ObjectNotFoundError,
     build_scoped_original_key,
@@ -279,7 +279,7 @@ async def search(
     if body.category and body.category not in assets.CATEGORIES:
         raise ApiError(422, "invalid_search", "Unsupported asset category")
     try:
-        rows = await search_knowledge(
+        rows = await search_assets(
             body.query,
             dealer_ids=None if claims.unrestricted else list(claims.dealer_ids),
             team_keys=list(claims.team_keys),

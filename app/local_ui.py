@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from app import db
 from app.config import settings
 from app.knowledge import assets, dealers
-from app.retrieval.knowledge_search import search_knowledge
+from app.retrieval.search import search_assets
 from app.storage import LocalStorage, ObjectNotFoundError
 
 
@@ -86,7 +86,7 @@ async def local_search(body: LocalSearchRequest, request: Request):
     dealer = await dealers.list_dealers([body.dealer_id])
     if not dealer or dealer[0]["status"] != "active":
         raise HTTPException(status_code=404, detail="经销商不存在")
-    rows = await search_knowledge(
+    rows = await search_assets(
         body.query,
         dealer_ids=[body.dealer_id],
         actor_id="local-pilot-ui",
@@ -98,6 +98,7 @@ async def local_search(body: LocalSearchRequest, request: Request):
     return {
         "items": rows,
         "count": len(rows),
+        "mode": rows[0].get("retrieval_kind", "knowledge") if rows else "knowledge",
         "dealer": {
             "id": dealer[0]["id"],
             "official_name": dealer[0]["official_name"],

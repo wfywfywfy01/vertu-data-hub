@@ -225,6 +225,18 @@ CREATE INDEX IF NOT EXISTS idx_image_embedding_dealer
 CREATE INDEX IF NOT EXISTS idx_image_embedding_vector
     ON image_embedding USING hnsw (embedding vector_cosine_ops);
 
+-- Local Chinese-CLIP vectors share the same image row but remain separate from
+-- the legacy 1024-dimension color-grid embedding.
+ALTER TABLE image_embedding ADD COLUMN IF NOT EXISTS semantic_embedding vector(512);
+ALTER TABLE image_embedding ADD COLUMN IF NOT EXISTS semantic_provider VARCHAR(40);
+ALTER TABLE image_embedding ADD COLUMN IF NOT EXISTS semantic_model VARCHAR(160);
+ALTER TABLE image_embedding ADD COLUMN IF NOT EXISTS quality_score REAL
+    CHECK (quality_score BETWEEN 0 AND 1);
+ALTER TABLE image_embedding ADD COLUMN IF NOT EXISTS semantic_labels JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE image_embedding ADD COLUMN IF NOT EXISTS semantic_indexed_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_image_embedding_semantic_vector
+    ON image_embedding USING hnsw (semantic_embedding vector_cosine_ops);
+
 -- Existing dealer-only installations are upgraded in place. Shared child rows keep
 -- dealer_id NULL; authorization always joins through knowledge_asset.
 ALTER TABLE source_object ADD COLUMN IF NOT EXISTS scope_type VARCHAR(20) NOT NULL DEFAULT 'dealer';
