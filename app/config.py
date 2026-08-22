@@ -36,6 +36,9 @@ class Settings:
 
     # 本地中文图文语义检索。模型版本在实现中固定，原图不离开本机/私有部署环境。
     semantic_image_batch_size: int = int(_env("SEMANTIC_IMAGE_BATCH_SIZE", "4"))
+    semantic_image_preload: bool = _env("SEMANTIC_IMAGE_PRELOAD", "true").lower() in {
+        "1", "true", "yes"
+    }
 
     # 有引用回答。默认禁用外发，显式开启后只发送脱敏 internal 证据。
     answer_provider: str = _env("ANSWER_PROVIDER", "disabled").lower()

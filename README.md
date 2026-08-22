@@ -50,7 +50,8 @@ python -m app.cli.index_semantic_images --dealer "VMG Communication and Technolo
 
 `POST /v1/search` 和本机 `/ui/api/search` 遇到图片分类或图片意图时自动切换到
 本地图文检索，返回画面匹配度、质量分、标签、原图引用及待人工确认的社媒配文草稿；
-没有语义索引时回退到原文字检索。
+没有语义索引时回退到原文字检索。默认在 API 启动时加载模型，模型缺失会阻止
+readiness，避免把冷启动时间留给首个用户请求。
 
 `POST /v1/search` 已提供经销商权限内的全文 + 向量混合检索。请求体示例：
 
