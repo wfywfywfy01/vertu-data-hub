@@ -14,8 +14,9 @@ copy .env.example .env                   # 按需改 embedding key 等
 python scripts/init_db.py                # 建表（幂等）
 python -m app.cli.preload_ocr             # 联网构建阶段预热 OCR 模型
 python -m app.cli.preload_semantic_images # 联网构建阶段预热本地图文模型
+python -m app.cli.preload_media            # 联网构建阶段预热本地语音模型
 python run_api.py                         # 私有 API（默认 127.0.0.1:8080）
-celery -A app.queue:celery_app worker -Q documents,images --pool=solo  # Windows worker
+celery -A app.queue:celery_app worker -Q documents,images,videos --pool=solo  # Windows worker
 ```
 
 API 需要 PDCA 服务令牌密钥。开发环境在 `.env` 设置至少 32 字节的
@@ -33,7 +34,7 @@ docker compose up -d redis
 开发环境接口文档：`http://127.0.0.1:8080/docs`。当前已支持经销商主表、OSS
 签名直传、上传完成校验、资产版本、Celery 路由，以及 PDF/DOCX/PPTX/XLSX/
 CSV/TXT/Markdown 文档解析、分块、向量化和页码引用。图片与扫描件 OCR 已交付；
-音视频 worker 尚未交付。
+音频和视频 worker 已支持本地转写、视频关键帧、时间码引用和派生物。
 
 图片 worker 支持 PNG/JPEG/WebP/HEIC 的真实格式校验、本地 OCR、检索前脱敏和
 图片向量；扫描 PDF 在没有数字文本时自动 OCR。图片同时使用固定版本的本地
@@ -133,7 +134,13 @@ python -m app.cli.ingest_local `
 版本，然后同步复用现有文档/图片 worker 写入 `content_chunk`，不依赖 Redis 或
 OSS。重复运行按文件路径和 SHA-256 跳过；同路径内容变化生成新版本。默认使用
 `confidential`，因此资料不会发送给外部回答模型。混合资料可先用 `unclassified`，
-整理后再按目录分别指定类别。当前音视频尚不支持本地处理，会明确报告失败。
+整理后再按目录分别指定类别。MP4/MOV/MP3/M4A/WAV 会进入本地媒体流水线；
+部署前必须预热 configured faster-whisper 模型。
+
+`GET /v1/assets/{asset_id}/content` 只返回安全预览：图片缩到 1280、移除元数据并
+加内部水印，文档与音视频返回再次脱敏的文字。原文件只能由管理员调用
+`POST /v1/exports`，提交不少于 10 字的原因并确认 `export-original` 后流式导出；
+预览和原件导出都写入追加式审计。
 
 旧 `python -m app.cli.sync --all` 只维护继承的数据源目录和旧表，不用于新版问答。
 生产试点把原文件放进私有 OSS 的
@@ -145,6 +152,14 @@ OSS。重复运行按文件路径和 SHA-256 跳过；同路径内容变化生�
 ```bash
 pytest
 ```
+
+生产监控使用私网 `/metrics`。每日数据库备份：
+
+```bash
+docker compose -f docker-compose.production.yml --profile ops run --rm backup
+```
+
+备份先写临时文件，使用 `pg_restore --list` 校验后再原子发布；每月至少恢复到临时库演练一次。
 
 ## 工程流程
 

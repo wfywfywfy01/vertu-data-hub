@@ -16,19 +16,29 @@
 | `POST` | `/v1/assets/complete` | 登记已上传对象并创建识别任务 |
 | `GET` | `/v1/assets` | 按经销商、类别、状态和时间筛选资料 |
 | `GET` | `/v1/assets/{asset_id}` | 读取资产、版本和处理状态 |
-| `GET` | `/v1/assets/{asset_id}/content` | 获取脱敏预览或短期下载链接 |
+| `GET` | `/v1/assets/{asset_id}/content` | 获取脱敏文字或带水印图片预览 |
 | `POST` | `/v1/search` | 混合检索，返回片段和引用 |
 | `POST` | `/v1/answers` | 生成有引用、默认脱敏的回答 |
 | `GET` | `/v1/reviews` | 获取调用者有权处理的待确认项 |
 | `POST` | `/v1/reviews/{review_id}/decision` | 提交分类、归属或主表确认 |
 | `GET/POST` | `/v1/dealers` | 查询或建议经销商主表记录 |
 | `PATCH` | `/v1/dealers/{dealer_id}` | 管理员确认正式名称、合并或停用 |
-| `POST` | `/v1/exports` | 管理员创建受审计的敏感导出任务 |
+| `POST` | `/v1/exports` | 管理员确认原因后流式导出原件 |
 | `GET` | `/v1/jobs/{job_id}` | 查询上传、处理或导出进度 |
 
 上传请求使用 `scope_type=dealer|department|company`。经销商范围传 `dealer_id`；
 部门范围传稳定 `scope_key`；公司范围固定为 `vertu`。普通销售只能写授权经销商，
 部门公用资料仅匹配 `team_keys` 的经理或管理员可写，公司公用资料仅管理员可写。
+
+### 预览与原件导出
+
+`GET /v1/assets/{asset_id}/content` 对所有角色重新执行资料范围授权。图片预览限制
+最长边 1280、移除 EXIF 并写入内部水印；其他资料只返回 `content_chunk` 中再次
+脱敏的文字，响应禁止缓存。原文件不通过该接口返回。
+
+`POST /v1/exports` 仅允许 `admin`，请求必须包含 `asset_id`、至少 10 字的 `reason`
+和 `confirmation=export-original`。服务在范围授权和源对象存在性校验后流式返回原件，
+并记录脱敏原因、原因哈希、版本、敏感级别和字节数。非管理员即使知道资产 ID 也返回 403。
 
 ### 混合检索
 
@@ -44,6 +54,10 @@ Chinese-CLIP 图文向量检索。授权范围、当前版本、`searchable` 状
 `semantic_similarity`、`quality_score`、`semantic_labels` 和
 `suggested_caption`；配文只作为发布前人工确认的草稿。模型在私有 worker 内运行，
 原图不发送给 OpenRouter 或外部图片 API。没有图片语义索引时自动回退文字检索。
+
+音视频转写和视频关键帧描述进入同一个 `content_chunk` 检索面；引用增加
+`timestamp_start` 与 `timestamp_end`。转写使用私有 worker 内的 faster-whisper，
+关键帧使用本地 Chinese-CLIP 标注，原始音视频不外发。
 
 ### 有引用回答
 

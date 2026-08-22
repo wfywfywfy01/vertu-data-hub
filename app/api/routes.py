@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+from typing import Literal
+from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Request
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
+from psycopg.types.json import Jsonb
 
+from app import db
 from app.api.auth import ServiceClaims, require_service_claims
 from app.api.errors import ApiError
 from app.answers.service import (
@@ -17,9 +23,12 @@ from app.config import settings
 from app.knowledge import assets, dealers
 from app.knowledge.scopes import KnowledgeScope, resolve_scope
 from app.queue import enqueue_processing_job
+from app.processing.previews import image_preview
+from app.processing.redaction import redact_text
 from app.retrieval.search import search_assets
 from app.storage import (
     ObjectNotFoundError,
+    LocalStorage,
     build_scoped_original_key,
     get_storage,
     validate_scoped_original_key,
@@ -80,6 +89,12 @@ class AnswerRequest(SearchRequest):
     top_k: int = Field(default=5, ge=1, le=10)
 
 
+class ExportRequest(BaseModel):
+    asset_id: UUID
+    reason: str = Field(min_length=10, max_length=500)
+    confirmation: Literal["export-original"]
+
+
 def _request_scope(body: PresignRequest | CompleteRequest) -> KnowledgeScope:
     return resolve_scope(
         dealer_id=body.dealer_id,
@@ -94,6 +109,62 @@ def _require_scope_write(claims: ServiceClaims, scope: KnowledgeScope) -> None:
         claims.require_role("manager", "admin")
     elif scope.scope_type == "company":
         claims.require_role("admin")
+
+
+async def _content_context(asset_id: UUID, claims: ServiceClaims) -> dict:
+    asset = await assets.get_asset(
+        asset_id,
+        None if claims.unrestricted else list(claims.dealer_ids),
+        list(claims.team_keys),
+    )
+    if not asset or asset["status"] != "searchable":
+        raise ApiError(404, "asset_not_found", "Asset was not found")
+    row = await db.fetch_one(
+        """
+        SELECT v.id AS asset_version_id, v.version_number, s.bucket, s.object_key,
+               s.original_name, s.content_type, s.byte_size
+        FROM asset_version v
+        JOIN source_object s ON s.id = v.source_object_id
+        WHERE v.asset_id = %s AND v.is_current
+        """,
+        (asset_id,),
+    )
+    if not row:
+        raise ApiError(404, "asset_content_not_found", "Asset content was not found")
+    return {**asset, **row}
+
+
+def _source_storage(context: dict):
+    return LocalStorage() if context["bucket"] == "local-inbox" else get_storage()
+
+
+def _content_disposition(disposition: str, filename: str) -> str:
+    safe = quote(filename, safe="")
+    return f"{disposition}; filename*=UTF-8''{safe}"
+
+
+async def _audit_content_access(
+    *, claims: ServiceClaims, action: str, context: dict, request: Request, payload: dict
+) -> None:
+    await db.execute(
+        """
+        INSERT INTO audit_event
+            (actor_id, action, object_type, object_id, request_id, payload)
+        VALUES (%s, %s, 'knowledge_asset', %s, %s, %s)
+        """,
+        (
+            claims.user_id,
+            action,
+            context["id"],
+            request.state.request_id,
+            Jsonb({
+                "asset_version_id": str(context["asset_version_id"]),
+                "version_number": context["version_number"],
+                "sensitivity": context["sensitivity"],
+                **payload,
+            }),
+        ),
+    )
 
 
 @router.get("/dealers")
@@ -254,6 +325,117 @@ async def get_asset(asset_id: UUID, claims: ServiceClaims = Depends(require_serv
     if not row:
         raise ApiError(404, "asset_not_found", "Asset was not found")
     return row
+
+
+@router.get("/assets/{asset_id}/content")
+async def preview_asset_content(
+    asset_id: UUID,
+    request: Request,
+    claims: ServiceClaims = Depends(require_service_claims),
+):
+    context = await _content_context(asset_id, claims)
+    if context["content_type"].startswith("image/"):
+        try:
+            source = await asyncio.to_thread(
+                _source_storage(context).download_bytes, context["object_key"]
+            )
+            content = await asyncio.to_thread(image_preview, source)
+        except (ObjectNotFoundError, ValueError):
+            raise ApiError(404, "asset_content_not_found", "Asset content was not found") from None
+        except Exception as exc:
+            raise ApiError(503, "preview_unavailable", "Asset preview is unavailable") from exc
+        await _audit_content_access(
+            claims=claims,
+            action="asset.previewed",
+            context=context,
+            request=request,
+            payload={"preview_type": "watermarked_image"},
+        )
+        return Response(
+            content,
+            media_type="image/jpeg",
+            headers={
+                "Cache-Control": "private, no-store",
+                "Content-Disposition": _content_disposition(
+                    "inline", f"{context['title']}-preview.jpg"
+                ),
+            },
+        )
+
+    chunks = await db.fetch_all(
+        """
+        SELECT text FROM content_chunk
+        WHERE asset_version_id = %s
+        ORDER BY chunk_index
+        LIMIT 100
+        """,
+        (context["asset_version_id"],),
+    )
+    text = "\n\n".join(str(row["text"]) for row in chunks).strip()
+    if not text:
+        raise ApiError(404, "preview_unavailable", "No safe preview is available")
+    safe_text = redact_text(text[:100_000]).text
+    await _audit_content_access(
+        claims=claims,
+        action="asset.previewed",
+        context=context,
+        request=request,
+        payload={"preview_type": "redacted_text", "character_count": len(safe_text)},
+    )
+    return Response(
+        safe_text,
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": _content_disposition(
+                "inline", f"{context['title']}-preview.txt"
+            ),
+        },
+    )
+
+
+@router.post("/exports")
+async def export_original_asset(
+    body: ExportRequest,
+    request: Request,
+    claims: ServiceClaims = Depends(require_service_claims),
+):
+    claims.require_role("admin")
+    context = await _content_context(body.asset_id, claims)
+    storage = _source_storage(context)
+    try:
+        if context["bucket"] == "local-inbox":
+            await asyncio.to_thread(storage.get_file_path, context["object_key"])
+        else:
+            await asyncio.to_thread(storage.head_object, context["object_key"])
+    except (ObjectNotFoundError, KeyError):
+        raise ApiError(404, "asset_content_not_found", "Asset content was not found") from None
+    except Exception as exc:
+        raise ApiError(503, "storage_unavailable", "Object storage is unavailable") from exc
+
+    reason = redact_text(body.reason).text
+    await _audit_content_access(
+        claims=claims,
+        action="asset.original_export_requested",
+        context=context,
+        request=request,
+        payload={
+            "reason": reason,
+            "reason_sha256": hashlib.sha256(body.reason.encode("utf-8")).hexdigest(),
+            "byte_size": context["byte_size"],
+        },
+    )
+    return StreamingResponse(
+        storage.iter_object(context["object_key"]),
+        media_type=context["content_type"],
+        headers={
+            "Cache-Control": "private, no-store",
+            "Content-Length": str(context["byte_size"]),
+            "Content-Disposition": _content_disposition(
+                "attachment", context["original_name"]
+            ),
+        },
+    )
 
 
 @router.get("/jobs/{job_id}")

@@ -11,14 +11,16 @@ from app.knowledge import assets
 from app.knowledge.scopes import resolve_scope
 from app.storage import (
     DOCUMENT_EXTENSIONS,
+    AUDIO_EXTENSIONS,
     IMAGE_EXTENSIONS,
+    VIDEO_EXTENSIONS,
     LocalStorage,
     file_hash,
     validate_upload,
 )
 
 
-SUPPORTED_EXTENSIONS = DOCUMENT_EXTENSIONS | IMAGE_EXTENSIONS
+SUPPORTED_EXTENSIONS = DOCUMENT_EXTENSIONS | IMAGE_EXTENSIONS | VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
 CONTENT_TYPES = {
     ".csv": "text/csv",
     ".heic": "image/heic",
@@ -68,7 +70,11 @@ async def _process_job(job: dict, storage: LocalStorage) -> dict:
         from app.workers.image import process_image_job
 
         return await process_image_job(job["id"], storage=storage)
-    raise ValueError("local ingestion supports documents and images only")
+    if job["queue_name"] == "videos":
+        from app.workers.media import process_media_job
+
+        return await process_media_job(job["id"], storage=storage)
+    raise ValueError("unsupported local processing queue")
 
 
 async def ingest_local_path(

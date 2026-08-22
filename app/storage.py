@@ -82,6 +82,14 @@ class LocalStorage:
             raise ObjectNotFoundError(key)
         return source.read_bytes()
 
+    def iter_object(self, key: str, block_size: int = 1024 * 1024):
+        source = self._target(key)
+        if not source.is_file():
+            raise ObjectNotFoundError(key)
+        with source.open("rb") as stream:
+            for block in iter(lambda: stream.read(block_size), b""):
+                yield block
+
     def get_file_path(self, key: str) -> Path:
         source = self._target(key)
         if not source.is_file():
@@ -215,6 +223,14 @@ class OssStorage:
 
     def download_bytes(self, key: str) -> bytes:
         return self.bucket.get_object(key).read()
+
+    def iter_object(self, key: str, block_size: int = 1024 * 1024):
+        result = self.bucket.get_object(key)
+        while True:
+            block = result.read(block_size)
+            if not block:
+                break
+            yield block
 
     def put_object(self, key: str, data: bytes, *, content_type: str) -> None:
         self.bucket.put_object(key, data, headers={"Content-Type": content_type})

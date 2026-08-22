@@ -59,3 +59,26 @@ def test_production_settings_fail_closed():
     )
     with pytest.raises(RuntimeError, match="invalid production configuration"):
         validate_production_settings(invalid)
+
+
+def test_production_settings_reject_unreadable_service_key(tmp_path):
+    invalid = SimpleNamespace(
+        app_env="production",
+        database_url="postgresql://user:pass@db.internal:5432/app",
+        oss_access_key_id="id",
+        oss_access_key_secret="secret",
+        oss_endpoint="oss.internal",
+        oss_bucket="bucket",
+        service_token_key_file=str(tmp_path / "missing.key"),
+        service_token_secret="",
+        redis_url="redis://redis.internal:6379/0",
+        embedding_provider="api",
+        embedding_base_url="https://embedding.internal/v1",
+        embedding_api_key="key",
+        image_embedding_provider="hash",
+        image_embedding_base_url="",
+        image_embedding_api_key="",
+    )
+
+    with pytest.raises(RuntimeError, match="readable file"):
+        validate_production_settings(invalid)

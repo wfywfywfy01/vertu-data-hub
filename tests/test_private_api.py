@@ -604,6 +604,117 @@ async def test_image_search_uses_same_private_scope(client, api_dealer, monkeypa
     assert captured["dealer_id"] == api_dealer["id"]
 
 
+async def test_asset_content_returns_safe_image_preview(client, monkeypatch):
+    from app.api import routes
+    from io import BytesIO
+    from PIL import Image
+
+    dealer_id = uuid.uuid4()
+    asset_id = uuid.uuid4()
+    source = BytesIO()
+    Image.new("RGB", (1800, 1200), "white").save(source, format="PNG")
+    audited = {}
+
+    async def context(_asset_id, claims):
+        assert _asset_id == asset_id
+        assert dealer_id in claims.dealer_ids
+        return {
+            "id": asset_id,
+            "title": "Event Photo",
+            "sensitivity": "confidential",
+            "asset_version_id": uuid.uuid4(),
+            "version_number": 1,
+            "bucket": "local-inbox",
+            "object_key": "event.png",
+            "original_name": "event.png",
+            "content_type": "image/png",
+            "byte_size": len(source.getvalue()),
+        }
+
+    class Storage:
+        def download_bytes(self, _key):
+            return source.getvalue()
+
+    async def audit(**kwargs):
+        audited.update(kwargs)
+
+    monkeypatch.setattr(routes, "_content_context", context)
+    monkeypatch.setattr(routes, "_source_storage", lambda _context: Storage())
+    monkeypatch.setattr(routes, "_audit_content_access", audit)
+
+    response = await client.get(
+        f"/v1/assets/{asset_id}/content",
+        headers={"Authorization": f"Bearer {_token(dealer_ids=[dealer_id])}"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/jpeg"
+    assert response.headers["cache-control"] == "private, no-store"
+    with Image.open(BytesIO(response.content)) as preview:
+        assert max(preview.size) == 1280
+    assert audited["action"] == "asset.previewed"
+
+
+async def test_original_export_requires_admin_and_confirmation(client, monkeypatch):
+    from app.api import routes
+
+    asset_id = uuid.uuid4()
+    original = b"private-original"
+    context = {
+        "id": asset_id,
+        "title": "Contract",
+        "sensitivity": "restricted",
+        "asset_version_id": uuid.uuid4(),
+        "version_number": 2,
+        "bucket": "local-inbox",
+        "object_key": "contract.pdf",
+        "original_name": "合同.pdf",
+        "content_type": "application/pdf",
+        "byte_size": len(original),
+    }
+    audited = {}
+
+    async def get_context(_asset_id, _claims):
+        return context
+
+    class Storage:
+        def get_file_path(self, _key):
+            return "contract.pdf"
+
+        def iter_object(self, _key):
+            yield original
+
+    async def audit(**kwargs):
+        audited.update(kwargs)
+
+    monkeypatch.setattr(routes, "_content_context", get_context)
+    monkeypatch.setattr(routes, "_source_storage", lambda _context: Storage())
+    monkeypatch.setattr(routes, "_audit_content_access", audit)
+    body = {
+        "asset_id": str(asset_id),
+        "reason": "Legal review for active agreement",
+        "confirmation": "export-original",
+    }
+
+    denied = await client.post(
+        "/v1/exports",
+        headers={"Authorization": f"Bearer {_token(role='manager', scope='team')}"},
+        json=body,
+    )
+    allowed = await client.post(
+        "/v1/exports",
+        headers={"Authorization": f"Bearer {_token(role='admin', scope='all')}"},
+        json=body,
+    )
+
+    assert denied.status_code == 403
+    assert allowed.status_code == 200
+    assert allowed.content == original
+    assert "attachment" in allowed.headers["content-disposition"]
+    assert allowed.headers["cache-control"] == "private, no-store"
+    assert audited["action"] == "asset.original_export_requested"
+
+
 async def test_answer_with_empty_scope_refuses_without_calling_model(client, search_records):
     request_id = f"pytest-answer-{uuid.uuid4()}"
     query = "inventory"

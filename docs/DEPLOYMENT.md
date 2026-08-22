@@ -10,6 +10,7 @@ an uncommitted directory.
 - Confirm target PostgreSQL has `vector` extension and required privileges.
 - Back up schema and data before DDL or bulk ingestion.
 - Provide secrets through the deployment environment, never Git.
+- Mount the same `dealer-knowledge-jwt.key` read-only into PDCA and data-hub; do not place it in either image.
 - Run schema validation and a bounded sync in a controlled window.
 - Record commit, migration result, source counts, retrieval smoke result, and
   rollback point in `PROGRESS.md` or the release record.

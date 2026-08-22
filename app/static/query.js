@@ -67,6 +67,12 @@ function excerpt(text, maximum = 360) {
   return value.length > maximum ? `${value.slice(0, maximum)}...` : value;
 }
 
+function formatTime(seconds) {
+  const value = Math.max(0, Math.floor(Number(seconds) || 0));
+  const minutes = Math.floor(value / 60);
+  return `${String(minutes).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
+}
+
 function renderResults(items) {
   resultsList.replaceChildren();
   items.forEach((row, index) => {
@@ -93,6 +99,12 @@ function renderResults(items) {
     fragment.querySelector(".citation-version").textContent = `v${citation.version_number || 1}`;
     fragment.querySelector(".citation-category").textContent = categoryLabels[row.category] || row.category;
     fragment.querySelector(".citation-sensitivity").textContent = sensitivityLabels[row.sensitivity] || row.sensitivity;
+    if (citation.timestamp_start !== undefined && citation.timestamp_start !== null) {
+      const time = fragment.querySelector(".citation-time");
+      time.hidden = false;
+      const end = citation.timestamp_end ?? citation.timestamp_start;
+      time.querySelector("dd").textContent = `${formatTime(citation.timestamp_start)}-${formatTime(end)}`;
+    }
     if (row.asset_id && browserImagePattern.test(citation.original_name || "")) {
       preview.href = previewUrl;
       image.src = previewUrl;

@@ -1,5 +1,21 @@
 # Progress
 
+## 2026-08-22：里程碑 4G 受控内容与音视频
+
+- 普通读取只返回移除元数据、缩小并带水印的图片，或再次脱敏的文字预览。
+- 原件导出仅允许管理员，必须提交原因与明确确认；版本、敏感级别、原因哈希和字节数写入追加式审计。
+- MP4/MOV 通过 PyAV 抽取关键帧；MP3/M4A/WAV 和视频音轨通过本地 faster-whisper 转写。
+- 转写和关键帧描述统一进入检索，引用保留起止秒数；本地导入和 Celery `videos` 队列已接通。
+
+### 验证
+
+- `python -m pytest -q`：91 passed。
+- 真实生成 MP4：探测、3 个时间点关键帧、派生 JPEG、画面 chunk 和时间码通过。
+- 真实生成 WAV：容器解码、模拟本地转写、邮箱脱敏、转写派生物和时间码通过。
+- 销售/经理原件导出 403；管理员原因确认后流式导出通过。
+- 2400×1600 带 EXIF 图片预览：缩到 1280、EXIF 清空、水印像素验证通过。
+- `small` 转写模型尚需在部署 worker 执行 `python -m app.cli.preload_media` 下载后做真实语音准确率验收。
+
 ## 2026-08-21：里程碑 4F 本机试点查询页
 
 - 新增 `/ui` 经销商知识查询页，支持经销商、资料分类、自然语言问题和引用结果。
@@ -209,6 +225,22 @@ Record command, commit, result, and environment here after each milestone.
 Do not mark a production milestone complete from unit tests alone; verify the
 database extension, ingestion, retrieval, and rollback path in the target
 environment.
+
+## 2026-08-22: pilot hardening and PDCA acceptance
+
+- Added scoped watermarked previews, redacted text previews, and audited admin-only original exports.
+- Added local audio transcription, video keyframes, time-coded citations, media routing, and preload commands.
+- Added production image/Compose/CI, low-cardinality HTTP metrics, shared key-file mounts, and atomic verified PostgreSQL backups.
+- Connected PDCA through short-lived scoped tokens; browsers never receive the shared key or object-storage credentials.
+
+Acceptance evidence:
+
+- `python -m pytest -q`: 95 passed; compilation and both Compose configurations passed.
+- PostgreSQL custom archive verified and restored into a disposable database with 53 assets.
+- PDCA full suite: 162 passed; frontend typecheck and production build passed.
+- Real browser: 8/8 images loaded, first result `image12.png`, zero console errors, desktop/mobile overflow 0.
+- Real authorization: sales original export 403; admin original export 200 with audit.
+- Production cloud credentials and services remain target-environment acceptance items.
 
 ## 2026-08-22: local semantic image retrieval
 

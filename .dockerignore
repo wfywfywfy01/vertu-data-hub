@@ -1,0 +1,17 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+.venv
+.pytest_cache
+.playwright-cli
+__pycache__
+*.pyc
+logs
+data
+media
+dist
+build
+backups
+secrets

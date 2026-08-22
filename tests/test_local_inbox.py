@@ -136,7 +136,7 @@ async def test_local_document_is_idempotent_versioned_and_searchable(
     assert current["n"] == 1
 
 
-async def test_local_inbox_reports_unsupported_files(tmp_path, local_dealer):
+async def test_local_inbox_reports_invalid_media(tmp_path, local_dealer):
     file_path = tmp_path / "video.mp4"
     file_path.write_bytes(b"not a video")
 
@@ -147,4 +147,4 @@ async def test_local_inbox_reports_unsupported_files(tmp_path, local_dealer):
     )
 
     assert result["failed"] == 1
-    assert result["items"][0]["error"] == "unsupported local file type"
+    assert result["items"][0]["error"] == "media_decode_error"

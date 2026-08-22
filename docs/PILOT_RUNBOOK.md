@@ -55,6 +55,7 @@ python -m venv .venv
 pip install -r requirements.txt
 python scripts/init_db.py
 python -m app.cli.preload_semantic_images
+python -m app.cli.preload_media
 python -m app.cli.register_source
 python -m app.cli.sync_oss --all
 ```

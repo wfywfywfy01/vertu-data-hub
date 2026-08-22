@@ -204,6 +204,10 @@ async def process_routed_job(job_id: str) -> dict:
         from app.workers.image import process_image_job
 
         return await process_image_job(job_id)
+    if job and job["queue_name"] == "videos":
+        from app.workers.media import process_media_job
+
+        return await process_media_job(job_id)
     return await process_document_job(job_id)
 
 

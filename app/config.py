@@ -1,5 +1,6 @@
 """环境变量配置。全部配置从 .env / 环境变量读取，代码中不出现明文密钥。"""
 import os
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
@@ -39,6 +40,12 @@ class Settings:
     semantic_image_preload: bool = _env("SEMANTIC_IMAGE_PRELOAD", "true").lower() in {
         "1", "true", "yes"
     }
+
+    # 本地音视频转写与关键帧。
+    media_transcription_model: str = _env("MEDIA_TRANSCRIPTION_MODEL", "small")
+    media_transcription_compute_type: str = _env("MEDIA_TRANSCRIPTION_COMPUTE_TYPE", "int8")
+    media_keyframe_interval_seconds: int = int(_env("MEDIA_KEYFRAME_INTERVAL_SECONDS", "30"))
+    media_max_keyframes: int = int(_env("MEDIA_MAX_KEYFRAMES", "60"))
 
     # 有引用回答。默认禁用外发，显式开启后只发送脱敏 internal 证据。
     answer_provider: str = _env("ANSWER_PROVIDER", "disabled").lower()
@@ -88,6 +95,10 @@ def validate_production_settings(value: Settings = settings) -> None:
         raise RuntimeError("OSS_SIGNED_URL_SECONDS must be between 60 and 3600")
     if not 1 <= getattr(value, "semantic_image_batch_size", 4) <= 32:
         raise RuntimeError("SEMANTIC_IMAGE_BATCH_SIZE must be between 1 and 32")
+    if not 5 <= getattr(value, "media_keyframe_interval_seconds", 30) <= 600:
+        raise RuntimeError("MEDIA_KEYFRAME_INTERVAL_SECONDS must be between 5 and 600")
+    if not 1 <= getattr(value, "media_max_keyframes", 60) <= 300:
+        raise RuntimeError("MEDIA_MAX_KEYFRAMES must be between 1 and 300")
     if value.app_env != "production":
         return
 
@@ -98,8 +109,17 @@ def validate_production_settings(value: Settings = settings) -> None:
     for name in ("oss_access_key_id", "oss_access_key_secret", "oss_endpoint", "oss_bucket"):
         if not getattr(value, name):
             errors.append(f"{name.upper()} is required")
-    if not getattr(value, "service_token_key_file", ""):
+    token_key_file = getattr(value, "service_token_key_file", "")
+    if not token_key_file:
         errors.append("SERVICE_TOKEN_KEY_FILE is required")
+    else:
+        try:
+            token_key = Path(token_key_file).read_text(encoding="utf-8").strip()
+        except OSError:
+            errors.append("SERVICE_TOKEN_KEY_FILE must be a readable file")
+        else:
+            if len(token_key.encode("utf-8")) < 32:
+                errors.append("SERVICE_TOKEN_KEY_FILE must contain at least 32 bytes")
     if getattr(value, "service_token_secret", ""):
         errors.append("SERVICE_TOKEN_SECRET is forbidden in production")
     redis_host = (urlsplit(getattr(value, "redis_url", "")).hostname or "").lower()
