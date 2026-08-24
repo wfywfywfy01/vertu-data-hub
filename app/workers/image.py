@@ -11,12 +11,16 @@ from psycopg.types.json import Jsonb
 from app import db
 from app.chunking import chunk_markdown
 from app.config import settings
+from app.embeddings.chinese_clip import MODEL_ID
 from app.embeddings.image import HashImageEmbedder, get_image_embedder
 from app.embeddings.text import get_text_embedder, vector_literal
 from app.knowledge import assets
+from app.knowledge.scopes import resolve_scope
 from app.processing.images import ImageExtraction, extract_image
 from app.processing.redaction import redact_text
-from app.storage import build_derived_key, get_storage
+from app.processing.sensitivity import high_sensitivity_reasons
+from app.semantic_images import analyze_images
+from app.storage import build_scoped_derived_key, get_storage
 
 
 PIPELINE_VERSION = "image-v1"
@@ -66,8 +70,10 @@ async def _save_output(
     artifact_hash: str | None,
     artifact_size: int | None,
     image_identity: tuple[str, str, int],
+    semantic_metadata: tuple[list[float], float, list[dict]],
 ) -> None:
     image_provider, image_model, image_dimension = image_identity
+    semantic_vector, quality_score, semantic_labels = semantic_metadata
     text_provider = settings.embedding_provider
     text_model = settings.embedding_model if text_provider == "api" else "hash-ngram-v1"
     chunks = chunk_markdown(extracted.text)
@@ -127,8 +133,11 @@ async def _save_output(
                 INSERT INTO image_embedding
                     (dealer_id, asset_version_id, embedding, embedding_provider,
                      embedding_model, embedding_dimension, width, height, image_format,
-                     ocr_language, ocr_line_count, ocr_mean_confidence, pipeline_version)
-                VALUES (%s, %s, %s::vector, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     ocr_language, ocr_line_count, ocr_mean_confidence, pipeline_version,
+                     semantic_embedding, semantic_provider, semantic_model, quality_score,
+                     semantic_labels, semantic_indexed_at)
+                VALUES (%s, %s, %s::vector, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s::vector, 'local', %s, %s, %s, now())
                 ON CONFLICT (asset_version_id, pipeline_version) DO UPDATE SET
                     embedding = EXCLUDED.embedding,
                     embedding_provider = EXCLUDED.embedding_provider,
@@ -140,6 +149,12 @@ async def _save_output(
                     ocr_language = EXCLUDED.ocr_language,
                     ocr_line_count = EXCLUDED.ocr_line_count,
                     ocr_mean_confidence = EXCLUDED.ocr_mean_confidence,
+                    semantic_embedding = EXCLUDED.semantic_embedding,
+                    semantic_provider = EXCLUDED.semantic_provider,
+                    semantic_model = EXCLUDED.semantic_model,
+                    quality_score = EXCLUDED.quality_score,
+                    semantic_labels = EXCLUDED.semantic_labels,
+                    semantic_indexed_at = now(),
                     created_at = now()
                 """,
                 (
@@ -148,6 +163,8 @@ async def _save_output(
                     extracted.width, extracted.height, extracted.image_format,
                     extracted.ocr_language, extracted.line_count, extracted.mean_confidence,
                     PIPELINE_VERSION,
+                    vector_literal(semantic_vector), MODEL_ID,
+                    quality_score, Jsonb(semantic_labels),
                 ),
             )
             await conn.execute(
@@ -187,10 +204,22 @@ async def process_image_job(job_id, *, storage=None) -> dict:
             raise PermanentImageError(
                 "image_format_mismatch", "decoded image format does not match filename"
             )
+        reasons = high_sensitivity_reasons(
+            extracted.text,
+            filename=context["original_name"],
+            sensitivity=context["sensitivity"],
+        )
+        if reasons and not context["input_data"].get("sensitive_review_approved"):
+            output = {"quarantined": True, "review_reasons": reasons}
+            await assets.transition_job(
+                job_id, "succeeded", progress=100, output_data=output
+            )
+            return {"status": "awaiting_review", "retryable": False, **output}
         redacted = redact_text(extracted.text)
         extracted = replace(extracted, text=redacted.text)
         image_embedder, image_provider, image_model, image_dimension = _select_image_embedder(context)
         image_vector = await image_embedder.embed_image(source)
+        semantic_metadata = (await asyncio.to_thread(analyze_images, [source]))[0]
         chunks = chunk_markdown(extracted.text)
         text_vectors = await get_text_embedder().embed([chunk.text for chunk in chunks]) if chunks else []
 
@@ -199,8 +228,14 @@ async def process_image_job(job_id, *, storage=None) -> dict:
         artifact_size = None
         if extracted.text:
             artifact = extracted.text.encode("utf-8")
-            artifact_key = build_derived_key(
-                context["dealer_id"], context["asset_version_id"], "ocr-image-v1.md"
+            artifact_key = build_scoped_derived_key(
+                resolve_scope(
+                    dealer_id=context["dealer_id"],
+                    scope_type=context["scope_type"],
+                    scope_key=context["scope_key"],
+                ),
+                context["asset_version_id"],
+                "ocr-image-v1.md",
             )
             await asyncio.to_thread(
                 storage.put_object, artifact_key, artifact, content_type="text/markdown"
@@ -217,6 +252,7 @@ async def process_image_job(job_id, *, storage=None) -> dict:
             artifact_hash=artifact_hash,
             artifact_size=artifact_size,
             image_identity=(image_provider, image_model, image_dimension),
+            semantic_metadata=semantic_metadata,
         )
         output = {
             "ocr_line_count": extracted.line_count,

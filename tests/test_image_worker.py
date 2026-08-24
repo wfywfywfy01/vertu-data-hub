@@ -28,6 +28,18 @@ class FakeImageEmbedder:
         return [0.0] * 1024
 
 
+@pytest.fixture(autouse=True)
+def fake_semantic_images(monkeypatch):
+    monkeypatch.setattr(
+        image_worker,
+        "analyze_images",
+        lambda images: [
+            ([0.0] * 512, 0.8, [{"label": "产品特写", "score": 0.6}])
+            for _image in images
+        ],
+    )
+
+
 @pytest.fixture
 async def image_record():
     output = BytesIO()
@@ -106,6 +118,8 @@ async def test_image_job_creates_ocr_chunk_vector_and_searchable_asset(
     )
     assert vector["ocr_language"] == "arabic"
     assert vector["ocr_line_count"] == 2
+    assert vector["semantic_model"] == "OFA-Sys/chinese-clip-vit-base-patch16"
+    assert vector["quality_score"] == pytest.approx(0.8)
     artifact = await db.fetch_one(
         "SELECT * FROM derived_artifact WHERE asset_version_id = %s",
         (registered["version"]["id"],),

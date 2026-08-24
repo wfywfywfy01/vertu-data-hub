@@ -72,7 +72,9 @@ CREATE INDEX IF NOT EXISTS idx_dealer_owner_principal
 
 CREATE TABLE IF NOT EXISTS source_object (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    dealer_id     UUID NOT NULL REFERENCES dealer(id),
+    dealer_id     UUID REFERENCES dealer(id),
+    scope_type    VARCHAR(20) NOT NULL DEFAULT 'dealer',
+    scope_key     VARCHAR(160),
     bucket        VARCHAR(120) NOT NULL,
     object_key    VARCHAR(900) NOT NULL,
     content_hash  VARCHAR(64) NOT NULL CHECK (content_hash ~ '^[0-9a-f]{64}$'),
@@ -87,7 +89,9 @@ CREATE TABLE IF NOT EXISTS source_object (
 
 CREATE TABLE IF NOT EXISTS knowledge_asset (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    dealer_id     UUID NOT NULL REFERENCES dealer(id),
+    dealer_id     UUID REFERENCES dealer(id),
+    scope_type    VARCHAR(20) NOT NULL DEFAULT 'dealer',
+    scope_key     VARCHAR(160),
     store_id      UUID REFERENCES dealer_store(id),
     logical_key   VARCHAR(300) NOT NULL,
     title         VARCHAR(500) NOT NULL,
@@ -122,7 +126,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_asset_current_version
 
 CREATE TABLE IF NOT EXISTS processing_job (
     id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    dealer_id         UUID NOT NULL REFERENCES dealer(id),
+    dealer_id         UUID REFERENCES dealer(id),
     asset_version_id  UUID NOT NULL REFERENCES asset_version(id),
     job_type          VARCHAR(40) NOT NULL DEFAULT 'ingestion',
     queue_name        VARCHAR(40) NOT NULL,
@@ -158,7 +162,7 @@ CREATE INDEX IF NOT EXISTS idx_processing_job_dispatch
 
 CREATE TABLE IF NOT EXISTS derived_artifact (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    dealer_id        UUID NOT NULL REFERENCES dealer(id),
+    dealer_id        UUID REFERENCES dealer(id),
     asset_version_id UUID NOT NULL REFERENCES asset_version(id),
     artifact_type    VARCHAR(40) NOT NULL,
     bucket           VARCHAR(120) NOT NULL,
@@ -174,7 +178,7 @@ CREATE TABLE IF NOT EXISTS derived_artifact (
 
 CREATE TABLE IF NOT EXISTS content_chunk (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    dealer_id           UUID NOT NULL REFERENCES dealer(id),
+    dealer_id           UUID REFERENCES dealer(id),
     asset_version_id    UUID NOT NULL REFERENCES asset_version(id),
     chunk_index         INTEGER NOT NULL CHECK (chunk_index >= 0),
     text                TEXT NOT NULL,
@@ -200,7 +204,7 @@ CREATE INDEX IF NOT EXISTS idx_content_chunk_text
 
 CREATE TABLE IF NOT EXISTS image_embedding (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    dealer_id           UUID NOT NULL REFERENCES dealer(id),
+    dealer_id           UUID REFERENCES dealer(id),
     asset_version_id    UUID NOT NULL REFERENCES asset_version(id),
     embedding           vector(1024) NOT NULL,
     embedding_provider  VARCHAR(40) NOT NULL,
@@ -221,6 +225,66 @@ CREATE INDEX IF NOT EXISTS idx_image_embedding_dealer
 CREATE INDEX IF NOT EXISTS idx_image_embedding_vector
     ON image_embedding USING hnsw (embedding vector_cosine_ops);
 
+-- Local Chinese-CLIP vectors share the same image row but remain separate from
+-- the legacy 1024-dimension color-grid embedding.
+ALTER TABLE image_embedding ADD COLUMN IF NOT EXISTS semantic_embedding vector(512);
+ALTER TABLE image_embedding ADD COLUMN IF NOT EXISTS semantic_provider VARCHAR(40);
+ALTER TABLE image_embedding ADD COLUMN IF NOT EXISTS semantic_model VARCHAR(160);
+ALTER TABLE image_embedding ADD COLUMN IF NOT EXISTS quality_score REAL
+    CHECK (quality_score BETWEEN 0 AND 1);
+ALTER TABLE image_embedding ADD COLUMN IF NOT EXISTS semantic_labels JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE image_embedding ADD COLUMN IF NOT EXISTS semantic_indexed_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_image_embedding_semantic_vector
+    ON image_embedding USING hnsw (semantic_embedding vector_cosine_ops);
+
+-- Existing dealer-only installations are upgraded in place. Shared child rows keep
+-- dealer_id NULL; authorization always joins through knowledge_asset.
+ALTER TABLE source_object ADD COLUMN IF NOT EXISTS scope_type VARCHAR(20) NOT NULL DEFAULT 'dealer';
+ALTER TABLE source_object ADD COLUMN IF NOT EXISTS scope_key VARCHAR(160);
+ALTER TABLE knowledge_asset ADD COLUMN IF NOT EXISTS scope_type VARCHAR(20) NOT NULL DEFAULT 'dealer';
+ALTER TABLE knowledge_asset ADD COLUMN IF NOT EXISTS scope_key VARCHAR(160);
+UPDATE source_object SET scope_key = dealer_id::text WHERE scope_key IS NULL;
+UPDATE knowledge_asset SET scope_key = dealer_id::text WHERE scope_key IS NULL;
+ALTER TABLE source_object ALTER COLUMN scope_key SET NOT NULL;
+ALTER TABLE knowledge_asset ALTER COLUMN scope_key SET NOT NULL;
+ALTER TABLE source_object ALTER COLUMN dealer_id DROP NOT NULL;
+ALTER TABLE knowledge_asset ALTER COLUMN dealer_id DROP NOT NULL;
+ALTER TABLE processing_job ALTER COLUMN dealer_id DROP NOT NULL;
+ALTER TABLE derived_artifact ALTER COLUMN dealer_id DROP NOT NULL;
+ALTER TABLE content_chunk ALTER COLUMN dealer_id DROP NOT NULL;
+ALTER TABLE image_embedding ALTER COLUMN dealer_id DROP NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_source_object_scope_hash
+    ON source_object (scope_type, scope_key, content_hash);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_knowledge_asset_scope_key
+    ON knowledge_asset (scope_type, scope_key, logical_key);
+CREATE INDEX IF NOT EXISTS idx_knowledge_asset_scope_filter
+    ON knowledge_asset (scope_type, scope_key, status, category, updated_at DESC);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'ck_source_object_scope'
+    ) THEN
+        ALTER TABLE source_object ADD CONSTRAINT ck_source_object_scope CHECK (
+            (scope_type = 'dealer' AND dealer_id IS NOT NULL AND scope_key = dealer_id::text)
+            OR (scope_type IN ('department','company') AND dealer_id IS NULL)
+        );
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'ck_knowledge_asset_scope'
+    ) THEN
+        ALTER TABLE knowledge_asset ADD CONSTRAINT ck_knowledge_asset_scope CHECK (
+            (scope_type = 'dealer' AND dealer_id IS NOT NULL AND scope_key = dealer_id::text)
+            OR (
+                scope_type IN ('department','company')
+                AND dealer_id IS NULL
+                AND store_id IS NULL
+            )
+        );
+    END IF;
+END
+$$;
+
 CREATE TABLE IF NOT EXISTS audit_event (
     id          BIGSERIAL PRIMARY KEY,
     actor_id    VARCHAR(160) NOT NULL,
@@ -233,6 +297,25 @@ CREATE TABLE IF NOT EXISTS audit_event (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_event_object
     ON audit_event (object_type, object_id, occurred_at DESC);
+
+CREATE TABLE IF NOT EXISTS original_export_grant (
+    id                 UUID PRIMARY KEY,
+    asset_id           UUID NOT NULL REFERENCES knowledge_asset(id),
+    asset_version_id   UUID NOT NULL REFERENCES asset_version(id),
+    initiated_by       VARCHAR(160) NOT NULL,
+    idempotency_key    VARCHAR(200) NOT NULL,
+    reason             VARCHAR(500) NOT NULL,
+    reason_sha256      VARCHAR(64) NOT NULL CHECK (reason_sha256 ~ '^[0-9a-f]{64}$'),
+    request_id         VARCHAR(200),
+    reauthenticated_at TIMESTAMPTZ NOT NULL,
+    created_at         TIMESTAMPTZ NOT NULL,
+    expires_at         TIMESTAMPTZ NOT NULL,
+    consumed_at        TIMESTAMPTZ,
+    UNIQUE (initiated_by, idempotency_key),
+    CHECK (expires_at > created_at)
+);
+CREATE INDEX IF NOT EXISTS idx_original_export_grant_expiry
+    ON original_export_grant (expires_at) WHERE consumed_at IS NULL;
 
 CREATE OR REPLACE FUNCTION prevent_audit_event_mutation()
 RETURNS trigger LANGUAGE plpgsql AS $$

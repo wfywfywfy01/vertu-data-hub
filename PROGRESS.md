@@ -1,5 +1,93 @@
 # Progress
 
+## 2026-08-22：里程碑 4G 受控内容与音视频
+
+- 普通读取只返回移除元数据、缩小并带水印的图片，或再次脱敏的文字预览。
+- 原件导出仅允许管理员，必须提交原因与明确确认；版本、敏感级别、原因哈希和字节数写入追加式审计。
+- MP4/MOV 通过 PyAV 抽取关键帧；MP3/M4A/WAV 和视频音轨通过本地 faster-whisper 转写。
+- 转写和关键帧描述统一进入检索，引用保留起止秒数；本地导入和 Celery `videos` 队列已接通。
+
+### 验证
+
+- `python -m pytest -q`：91 passed。
+- 真实生成 MP4：探测、3 个时间点关键帧、派生 JPEG、画面 chunk 和时间码通过。
+- 真实生成 WAV：容器解码、模拟本地转写、邮箱脱敏、转写派生物和时间码通过。
+- 销售/经理原件导出 403；管理员原因确认后流式导出通过。
+- 2400×1600 带 EXIF 图片预览：缩到 1280、EXIF 清空、水印像素验证通过。
+- `small` 转写模型尚需在部署 worker 执行 `python -m app.cli.preload_media` 下载后做真实语音准确率验收。
+
+## 2026-08-21：里程碑 4F 本机试点查询页
+
+- 查询页已迁入 PDCA `/app/knowledge`；本仓库仅保留私有数据 API。
+- PDCA 页面展示脱敏片段、词法/语义相关度、文件名、版本和分类。
+- 图片结果展示延迟加载的带水印预览；原件只允许管理员二次认证后一次性下载。
+- 浏览器不持有服务令牌、OSS 凭据或数据底座地址。
+- 完成 1440×900 和 390×844 浏览器验收，无横向溢出、控制台错误或警告。
+
+### 验证
+
+- `python -m pytest -q`：80 passed。
+- 真实 VMG 数据加载 52 项可检索资产；键盘提交 `VERTU Vietnam` 返回带引用关键词结果。
+- 真实查询加载 8 张缩略图；首张原图接口返回 JPEG `3536×2431`，桌面与手机均通过。
+- 编译、Git diff 检查和 Docker Compose 配置检查通过。
+
+## 2026-08-21：里程碑 4E 部门与公司公用资料
+
+- 新增 `dealer / department / company` 三种明确资料范围，禁止使用假经销商。
+- 现有经销商数据幂等迁移；共享资料使用独立对象前缀且保留原版本、ETL、引用和审计链。
+- 本地导入支持 `--department` 与 `--company`；API 令牌支持可选 `team_keys`。
+- 查询自动合并授权经销商、所属部门和公司公用资料；部门之间保持隔离。
+
+### 验证
+
+- `python -m pytest -q`：74 passed。
+- 现有试点库迁移通过；临时空库连续建库两次通过。
+- 部门和公司 Markdown 实际导入、处理、检索通过。
+- 部门 PDF API 登记、经理授权、跨部门拒绝和普通销售拒绝通过。
+
+## 2026-08-20：里程碑 4D 中文复合问题召回
+
+- 保留 PostgreSQL 严格全文检索；无结果时按英文词和中文双字词执行经销商范围内兜底。
+- 复合问题至少命中三个词才形成词法证据，继续限制为当前、可检索版本。
+- Safiran Hamrah 真实长问已命中当前资料版本并返回引用；机密证据仍禁止外发。
+
+### 验证
+
+- `python -m pytest -q`：71 passed。
+- 编译、Compose 配置、依赖检查和两次幂等建库通过。
+- 真实问题“库存由谁录入，多久更新一次，哪天更新”返回 1 条版本 2 引用。
+
+## 2026-08-20：里程碑 4C 本地资料直入新版知识库
+
+- 新增 `python -m app.cli.ingest_local`，按经销商、类别和敏感级别批量导入本地文件。
+- 原文件复制到受控本地对象区，执行路径穿越、扩展名、MIME、大小和 SHA-256 校验。
+- 文档和图片同步复用现有新版 worker，不依赖 Redis/OSS，成功后进入 `content_chunk`。
+- 默认 `confidential + unclassified`；重复导入跳过，同路径内容变化生成不可变新版本。
+- 音视频仍未实现，命令明确拒绝，不生成无法处理的排队任务。
+
+### 验证
+
+- `python -m pytest -q`：70 passed。
+- Markdown 真实导入：资产、托管原件、派生物、chunk 和检索引用通过。
+- 同文件二次导入 0 新版本；内容变化生成版本 2，只有一个当前版本。
+- Windows 长路径、托管区路径穿越和不支持文件类型测试通过。
+- 真实库存在 Safiran 负责人记录时测试仍隔离；ISO 日期不会误脱敏为电话号码。
+
+## 2026-08-19：里程碑 4B 有引用回答
+
+- 实现 `POST /v1/answers`，复用经销商权限内混合检索和引用。
+- OpenRouter 使用严格 JSON Schema 输出；模型引用索引必须映射到实际证据。
+- 无可靠证据时拒答；`confidential/restricted` 证据禁止发送外部模型。
+- 查询、证据和最终回答执行脱敏；OpenRouter 地址限制为官方 HTTPS API。
+- 追加 `knowledge.answer` 哈希审计，记录状态、模型、Token 用量和引用资产，不保存原始问答。
+- OpenRouter 真实 API 冒烟取决于部署环境密钥；50 问业务 RAG 回归集尚未建立。
+
+### 验证
+
+- `python -m pytest -q`：65 passed。
+- 真实 PostgreSQL/pgvector：空权限拒答、越权 403、哈希审计通过。
+- OpenRouter MockTransport：官方端点、严格结构化输出、引用映射和 Token 用量过滤通过。
+
 ## 2026-08-19：里程碑 4A 权限内混合检索
 
 - 实现 `POST /v1/search`，支持 query、经销商、类别和 Top-K 过滤。
@@ -137,3 +225,45 @@ Record command, commit, result, and environment here after each milestone.
 Do not mark a production milestone complete from unit tests alone; verify the
 database extension, ingestion, retrieval, and rollback path in the target
 environment.
+
+## 2026-08-22: pilot hardening and PDCA acceptance
+
+- Added scoped watermarked previews, redacted text previews, and audited admin-only original exports.
+- Added pre-index high-sensitivity quarantine and admin-only approve/reject review flow.
+- Applied the idempotent schema to the cloud pilot after a verified PostgreSQL backup; 53 assets and 44 chunks remained intact.
+- Verified real cloud retrieval for Safiran Hamrah text and VMG event images; all 52 VMG images have local semantic vectors.
+- Added local audio transcription, video keyframes, time-coded citations, media routing, and preload commands.
+- Added production image/Compose/CI, low-cardinality HTTP metrics, shared key-file mounts, and atomic verified PostgreSQL backups.
+- Connected PDCA through short-lived scoped tokens; browsers never receive the shared key or object-storage credentials.
+
+Acceptance evidence:
+
+- `python -m pytest -q`: 103 passed; compilation and both Compose configurations passed.
+- PostgreSQL custom archive verified and restored into a disposable database with 53 assets.
+- PDCA full suite: 169 passed; frontend typecheck and production build passed.
+- Real browser: 8/8 images loaded, first result `image12.png`, zero console errors, desktop/mobile overflow 0.
+- Real authorization: sales original export 403; admin original export 200 with audit.
+- Production cloud credentials and services remain target-environment acceptance items.
+
+## 2026-08-22: local semantic image retrieval
+
+- Added pinned `OFA-Sys/chinese-clip-vit-base-patch16` local inference using
+  safetensors weights; confidential originals never leave the private runtime.
+- Added 512-dimension semantic vectors, quality scores, visual labels, automatic
+  worker indexing, idempotent backfill CLI, dealer-scoped retrieval, audit hashes,
+  and text-search fallback.
+- Routed both `/v1/search` and the loopback UI through the same image-intent logic.
+- Added real image previews, visual scores, recommendation reasons, and caption
+  drafts marked for human confirmation.
+
+Acceptance evidence:
+
+- `python -m pytest -q`: 84 passed.
+- `python -m compileall -q app scripts tests`: passed.
+- `docker compose config --quiet`: passed.
+- `python scripts/init_db.py`: repeatable migration passed.
+- VMG: 52 searchable images, 52 semantic vectors.
+- Real social-media query top four: `image12.png`, `image14.png`, `image09.png`,
+  `image08.png`; all four visually inspected as clear model/product event images.
+- Playwright desktop and 390x844 mobile: no horizontal overflow, 8/8 previews
+  loaded, zero console errors, search and image requests returned HTTP 200.

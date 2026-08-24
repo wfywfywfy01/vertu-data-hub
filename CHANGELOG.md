@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Added low-cardinality Prometheus HTTP metrics and verified atomic PostgreSQL backups with retention.
+- Added scoped metadata-free image and redacted text previews plus reason-confirmed, admin-only original exports with append-only audits.
+- Added local audio transcription, video keyframes, time-coded citations, media-derived artifacts, Celery/local ingestion routing, and model preloading.
+- Added pinned local Chinese-CLIP text-to-image retrieval, automatic image indexing, quality-aware ranking, visual labels, social caption drafts, scoped API routing, and human UI results.
+- Added a loopback-only pilot query UI with dealer/category filters, managed image previews, redacted cited results, responsive layouts, and production fail-closed access.
+- Added dealer, department, and company knowledge scopes with scoped ingestion, storage, API authorization, retrieval, and backward-compatible migration.
+- Added guarded Chinese bigram fallback retrieval for compound dealer questions when strict full-text search returns no rows.
+- Fixed valid ISO dates being misclassified as phone numbers during redaction.
+- Added synchronous local dealer-file ingestion into the versioned searchable pipeline with managed originals and idempotent retries.
+- Added evidence-gated OpenRouter answers with validated citations, sensitivity blocking, output redaction, and hash-only audits.
 - Added dealer-scoped hybrid full-text/vector search with RRF, cited redacted results, and hash-only query auditing.
 - Added local multilingual image OCR, scanned-PDF fallback, HEIC support, image vectors, retrieval-layer redaction, and fail-closed external image processing.
 - Added document workers for verified OSS download, Docling/PDFium extraction, cited chunks, embeddings, derived Markdown, and retry-aware job status.
@@ -15,3 +25,9 @@
 - Added cloud cutover, remote database, worker inbox, and acceptance runbook.
 - Added private OSS incremental mirroring and one-command ingestion.
 - Added fail-closed production configuration and failed-sync exit handling.
+
+### Verification
+
+- `python -m pytest -q`: 95 passed.
+- VMG: 52/52 images indexed; social-media query top four are `image12.png`, `image14.png`, `image09.png`, and `image08.png`.
+- Playwright desktop and 390px mobile: no horizontal overflow, 8/8 images loaded, zero console errors.

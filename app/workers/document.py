@@ -12,10 +12,12 @@ from app import db
 from app.config import settings
 from app.embeddings.text import get_text_embedder, vector_literal
 from app.knowledge import assets
+from app.knowledge.scopes import resolve_scope
 from app.processing.documents import CitedChunk, ExtractedDocument, extract_document
 from app.processing.redaction import redact_text
+from app.processing.sensitivity import high_sensitivity_reasons
 from app.queue import celery_app
-from app.storage import build_derived_key, get_storage
+from app.storage import build_scoped_derived_key, get_storage
 
 
 PIPELINE_VERSION = "document-v2"
@@ -145,10 +147,27 @@ async def process_document_job(job_id, *, storage=None) -> dict:
             extracted = await asyncio.to_thread(
                 extract_document, source_path, context["language_code"]
             )
+            reasons = high_sensitivity_reasons(
+                extracted.markdown,
+                filename=context["original_name"],
+                sensitivity=context["sensitivity"],
+            )
+            if reasons and not context["input_data"].get("sensitive_review_approved"):
+                output = {"quarantined": True, "review_reasons": reasons}
+                await assets.transition_job(
+                    job_id, "succeeded", progress=100, output_data=output
+                )
+                return {"status": "awaiting_review", "retryable": False, **output}
             extracted, redaction_count = _redact_document(extracted)
             artifact_bytes = extracted.markdown.encode("utf-8")
-            artifact_key = build_derived_key(
-                context["dealer_id"], context["asset_version_id"], "document-v2.md"
+            artifact_key = build_scoped_derived_key(
+                resolve_scope(
+                    dealer_id=context["dealer_id"],
+                    scope_type=context["scope_type"],
+                    scope_key=context["scope_key"],
+                ),
+                context["asset_version_id"],
+                "document-v2.md",
             )
             await asyncio.to_thread(
                 storage.put_object,
@@ -197,6 +216,10 @@ async def process_routed_job(job_id: str) -> dict:
         from app.workers.image import process_image_job
 
         return await process_image_job(job_id)
+    if job and job["queue_name"] == "videos":
+        from app.workers.media import process_media_job
+
+        return await process_media_job(job_id)
     return await process_document_job(job_id)
 
 

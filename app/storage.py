@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+from pathlib import Path
 from pathlib import PurePosixPath
 import re
+import shutil
 import uuid
 from datetime import datetime, timezone
 
 from app.config import settings
+from app.knowledge.scopes import KnowledgeScope, resolve_scope
 
 
 DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".csv", ".txt", ".md"}
@@ -31,6 +35,85 @@ class ObjectMetadata:
 
 class ObjectNotFoundError(Exception):
     pass
+
+
+class LocalStorage:
+    """Managed local object storage for synchronous pilot ingestion."""
+
+    def __init__(self, root=None):
+        default = Path(settings.watched_root) / ".knowledge-objects"
+        self.root = Path(root or default).resolve()
+
+    def _target(self, key: str) -> Path:
+        path = PurePosixPath(str(key or "").replace("\\", "/"))
+        if path.is_absolute() or not path.parts or ".." in path.parts:
+            raise ValueError("unsafe local object key")
+        target = self.root.joinpath(*path.parts).resolve()
+        if target != self.root and self.root not in target.parents:
+            raise ValueError("unsafe local object key")
+        return target
+
+    def import_file(self, key: str, source, *, content_hash: str) -> None:
+        source_path = Path(source).resolve()
+        target = self._target(key)
+        if target.exists():
+            if file_hash(target) != content_hash:
+                raise RuntimeError("managed local object failed integrity check")
+            return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(f".tmp-{uuid.uuid4().hex[:8]}")
+        try:
+            shutil.copyfile(source_path, temporary)
+            if file_hash(temporary) != content_hash:
+                raise RuntimeError("copied local object failed integrity check")
+            temporary.replace(target)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def download_to_file(self, key: str, target) -> None:
+        source = self._target(key)
+        if not source.is_file():
+            raise ObjectNotFoundError(key)
+        shutil.copyfile(source, target)
+
+    def download_bytes(self, key: str) -> bytes:
+        source = self._target(key)
+        if not source.is_file():
+            raise ObjectNotFoundError(key)
+        return source.read_bytes()
+
+    def iter_object(self, key: str, block_size: int = 1024 * 1024):
+        source = self._target(key)
+        if not source.is_file():
+            raise ObjectNotFoundError(key)
+        with source.open("rb") as stream:
+            for block in iter(lambda: stream.read(block_size), b""):
+                yield block
+
+    def get_file_path(self, key: str) -> Path:
+        source = self._target(key)
+        if not source.is_file():
+            raise ObjectNotFoundError(key)
+        return source
+
+    def put_object(self, key: str, data: bytes, *, content_type: str) -> None:
+        del content_type
+        target = self._target(key)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(f".tmp-{uuid.uuid4().hex[:8]}")
+        try:
+            temporary.write_bytes(data)
+            temporary.replace(target)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def file_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def validate_upload(filename: str, content_type: str, byte_size: int, content_hash: str) -> str:
@@ -63,29 +146,46 @@ def validate_upload(filename: str, content_type: str, byte_size: int, content_ha
     return extension
 
 
-def build_original_key(dealer_id, filename: str) -> str:
+def build_scoped_original_key(scope: KnowledgeScope, filename: str) -> str:
     extension = PurePosixPath(str(filename).replace("\\", "/")).suffix.lower() or ".bin"
     now = datetime.now(timezone.utc)
     return (
-        f"{settings.app_env}/dealers/{dealer_id}/original/"
+        f"{settings.app_env}/{scope.storage_prefix}/original/"
         f"{now:%Y/%m}/{uuid.uuid4().hex}{extension}"
     )
 
 
-def validate_original_key(dealer_id, object_key: str) -> str:
+def build_original_key(dealer_id, filename: str) -> str:
+    return build_scoped_original_key(resolve_scope(dealer_id=dealer_id), filename)
+
+
+def validate_scoped_original_key(scope: KnowledgeScope, object_key: str) -> str:
     key = str(object_key or "").strip().replace("\\", "/")
     path = PurePosixPath(key)
-    prefix = f"{settings.app_env}/dealers/{dealer_id}/original/"
+    prefix = f"{settings.app_env}/{scope.storage_prefix}/original/"
     if path.is_absolute() or ".." in path.parts or not key.startswith(prefix) or len(key) <= len(prefix):
-        raise ValueError("object key must be inside dealer original prefix")
+        owner = "dealer" if scope.scope_type == "dealer" else "authorized"
+        raise ValueError(f"object key must be inside {owner} original prefix")
     return key
 
 
-def build_derived_key(dealer_id, asset_version_id, filename: str) -> str:
+def validate_original_key(dealer_id, object_key: str) -> str:
+    return validate_scoped_original_key(resolve_scope(dealer_id=dealer_id), object_key)
+
+
+def build_scoped_derived_key(
+    scope: KnowledgeScope, asset_version_id, filename: str
+) -> str:
     name = PurePosixPath(str(filename).replace("\\", "/")).name
     if not name or name in {".", ".."}:
         raise ValueError("invalid derived filename")
-    return f"{settings.app_env}/dealers/{dealer_id}/derived/{asset_version_id}/{name}"
+    return f"{settings.app_env}/{scope.storage_prefix}/derived/{asset_version_id}/{name}"
+
+
+def build_derived_key(dealer_id, asset_version_id, filename: str) -> str:
+    return build_scoped_derived_key(
+        resolve_scope(dealer_id=dealer_id), asset_version_id, filename
+    )
 
 
 class OssStorage:
@@ -123,6 +223,14 @@ class OssStorage:
 
     def download_bytes(self, key: str) -> bytes:
         return self.bucket.get_object(key).read()
+
+    def iter_object(self, key: str, block_size: int = 1024 * 1024):
+        result = self.bucket.get_object(key)
+        while True:
+            block = result.read(block_size)
+            if not block:
+                break
+            yield block
 
     def put_object(self, key: str, data: bytes, *, content_type: str) -> None:
         self.bucket.put_object(key, data, headers={"Content-Type": content_type})
