@@ -24,10 +24,10 @@ RUN python -m pip install --disable-pip-version-check -r requirements.txt
 
 COPY --chown=app:app . .
 RUN mkdir -p /models/huggingface && chown -R app:app /models
+RUN python -m app.cli.preload_ocr
 
 USER app
-RUN python -m app.cli.preload_ocr \
-    && python -m app.cli.preload_semantic_images \
+RUN python -m app.cli.preload_semantic_images \
     && python -m app.cli.preload_media \
     && TRANSFORMERS_OFFLINE=1 python -m app.cli.check_models
 

@@ -782,17 +782,32 @@ async def test_asset_content_returns_safe_image_preview(client, monkeypatch):
 
 
 @pytest.fixture
-async def export_api(monkeypatch):
+async def export_api(monkeypatch, api_dealer):
     from app.api import routes
 
-    asset_id = uuid.uuid4()
     original = b"private-original"
+    registered = await assets.register_asset_version(
+        dealer_id=api_dealer["id"],
+        logical_key=f"export-contract-{uuid.uuid4()}",
+        title="Contract",
+        category="contract_compliance",
+        sensitivity="restricted",
+        bucket="pytest-private",
+        object_key=f"development/dealers/{api_dealer['id']}/original/contract.pdf",
+        content_hash=hashlib.sha256(original).hexdigest(),
+        original_name="合同.pdf",
+        content_type="application/pdf",
+        byte_size=len(original),
+        actor_id="pytest-sales",
+        idempotency_key=f"pytest-export-{uuid.uuid4()}",
+    )
+    asset_id = registered["asset"]["id"]
     context = {
         "id": asset_id,
         "title": "Contract",
         "sensitivity": "restricted",
-        "asset_version_id": uuid.uuid4(),
-        "version_number": 2,
+        "asset_version_id": registered["version"]["id"],
+        "version_number": registered["version"]["version_number"],
         "bucket": "local-inbox",
         "object_key": "contract.pdf",
         "original_name": "合同.pdf",
