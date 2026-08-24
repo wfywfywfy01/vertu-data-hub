@@ -13,7 +13,7 @@ services:
     ports:
       - "127.0.0.1:${DATA_HUB_PORT:-8080}:8080"
     volumes:
-      - ${DATA_HUB_SERVICE_TOKEN_KEY_FILE_HOST:-./secrets/dealer-knowledge-jwt.key}:/run/secrets/dealer-knowledge-jwt.key:ro
+      - dealer_knowledge_secrets:/run/secrets:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=5)"]
       interval: 15s
@@ -32,7 +32,7 @@ services:
       SERVICE_TOKEN_KEY_FILE: /run/secrets/dealer-knowledge-jwt.key
     command: ["sh", "-c", "python -m app.cli.check_models && exec celery -A app.queue:celery_app worker -Q documents,images,videos --loglevel=INFO"]
     volumes:
-      - ${DATA_HUB_SERVICE_TOKEN_KEY_FILE_HOST:-./secrets/dealer-knowledge-jwt.key}:/run/secrets/dealer-knowledge-jwt.key:ro
+      - dealer_knowledge_secrets:/run/secrets:ro
 
   backup:
     image: ${DATA_HUB_IMAGE:?Set DATA_HUB_IMAGE to an image digest or commit tag}
@@ -44,3 +44,8 @@ services:
     command: ["python", "scripts/backup_database.py"]
     volumes:
       - ${DATA_HUB_BACKUP_DIR_HOST:-./backups}:/backups
+
+volumes:
+  dealer_knowledge_secrets:
+    external: true
+    name: dealer-knowledge-secrets
