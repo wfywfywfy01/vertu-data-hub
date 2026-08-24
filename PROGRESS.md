@@ -238,7 +238,7 @@ environment.
 
 Acceptance evidence:
 
-- `python -m pytest -q`: 103 passed; compilation and both Compose configurations passed.
+- `python -m pytest -q`: 104 passed; compilation and both Compose configurations passed.
 - PostgreSQL custom archive verified and restored into a disposable database with 53 assets.
 - PDCA full suite: 169 passed; frontend typecheck and production build passed.
 - Real browser: 8/8 images loaded, first result `image12.png`, zero console errors, desktop/mobile overflow 0.

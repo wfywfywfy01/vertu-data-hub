@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
   test:
@@ -90,3 +91,18 @@ jobs:
           done
           docker logs data-hub-smoke
           exit 1
+      - name: Log in to GitHub Container Registry
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Publish tested image
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: |
+          registry_image="ghcr.io/wfywfywfy01/vertu-data-hub"
+          docker tag "vertu-data-hub:${{ github.sha }}" "$registry_image:${{ github.sha }}"
+          docker tag "vertu-data-hub:${{ github.sha }}" "$registry_image:latest"
+          docker push "$registry_image:${{ github.sha }}"
+          docker push "$registry_image:latest"
