@@ -18,10 +18,10 @@
 
 ## 2026-08-21：里程碑 4F 本机试点查询页
 
-- 新增 `/ui` 经销商知识查询页，支持经销商、资料分类、自然语言问题和引用结果。
-- 页面展示可检索资产数、脱敏片段、词法/语义相关度、文件名、版本、分类和敏感级别。
-- 图片结果展示延迟加载缩略图；点击后通过受管资产接口查看原图，不开放任意文件路径。
-- 本机页面不持有服务令牌，只在 `development` 且 loopback 请求下开放；生产环境关闭。
+- 查询页已迁入 PDCA `/app/knowledge`；本仓库仅保留私有数据 API。
+- PDCA 页面展示脱敏片段、词法/语义相关度、文件名、版本和分类。
+- 图片结果展示延迟加载的带水印预览；原件只允许管理员二次认证后一次性下载。
+- 浏览器不持有服务令牌、OSS 凭据或数据底座地址。
 - 完成 1440×900 和 390×844 浏览器验收，无横向溢出、控制台错误或警告。
 
 ### 验证
@@ -229,15 +229,18 @@ environment.
 ## 2026-08-22: pilot hardening and PDCA acceptance
 
 - Added scoped watermarked previews, redacted text previews, and audited admin-only original exports.
+- Added pre-index high-sensitivity quarantine and admin-only approve/reject review flow.
+- Applied the idempotent schema to the cloud pilot after a verified PostgreSQL backup; 53 assets and 44 chunks remained intact.
+- Verified real cloud retrieval for Safiran Hamrah text and VMG event images; all 52 VMG images have local semantic vectors.
 - Added local audio transcription, video keyframes, time-coded citations, media routing, and preload commands.
 - Added production image/Compose/CI, low-cardinality HTTP metrics, shared key-file mounts, and atomic verified PostgreSQL backups.
 - Connected PDCA through short-lived scoped tokens; browsers never receive the shared key or object-storage credentials.
 
 Acceptance evidence:
 
-- `python -m pytest -q`: 95 passed; compilation and both Compose configurations passed.
+- `python -m pytest -q`: 103 passed; compilation and both Compose configurations passed.
 - PostgreSQL custom archive verified and restored into a disposable database with 53 assets.
-- PDCA full suite: 162 passed; frontend typecheck and production build passed.
+- PDCA full suite: 169 passed; frontend typecheck and production build passed.
 - Real browser: 8/8 images loaded, first result `image12.png`, zero console errors, desktop/mobile overflow 0.
 - Real authorization: sales original export 403; admin original export 200 with audit.
 - Production cloud credentials and services remain target-environment acceptance items.

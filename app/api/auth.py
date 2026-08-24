@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
@@ -20,6 +21,8 @@ class ServiceClaims:
     scope: str
     dealer_ids: frozenset[UUID]
     team_keys: frozenset[str]
+    reauthenticated_at: datetime | None = None
+    reauthentication_purpose: str | None = None
 
     @property
     def unrestricted(self) -> bool:
@@ -46,8 +49,18 @@ class ServiceClaims:
         if self.role not in roles:
             raise ApiError(403, "role_denied", "Role is not allowed for this operation")
 
+    def require_recent_reauth(self, now: datetime, max_age_seconds: int = 300) -> None:
+        if (
+            self.reauthenticated_at is None
+            or self.reauthentication_purpose != "knowledge-original-export"
+        ):
+            raise ApiError(403, "recent_reauth_required", "Recent step-up authentication is required")
+        age = (now - self.reauthenticated_at).total_seconds()
+        if age < 0 or age > max_age_seconds:
+            raise ApiError(403, "recent_reauth_required", "Recent step-up authentication is required")
 
-def _key() -> str:
+
+def service_token_key() -> str:
     if settings.service_token_key_file:
         try:
             value = Path(settings.service_token_key_file).read_text(encoding="utf-8").strip()
@@ -66,7 +79,7 @@ async def require_service_claims(authorization: str = Header(default="")) -> Ser
     try:
         payload = jwt.decode(
             authorization[7:],
-            _key(),
+            service_token_key(),
             algorithms=["HS256"],
             audience=settings.service_token_audience,
             issuer=settings.service_token_issuer,
@@ -87,6 +100,11 @@ async def require_service_claims(authorization: str = Header(default="")) -> Ser
         if not isinstance(raw_team_keys, list):
             raise ValueError("team_keys must be a list")
         team_keys = frozenset(normalize_scope_key(value) for value in raw_team_keys)
+        reauthenticated_at = None
+        reauthentication_purpose = None
+        if "reauth_at" in payload:
+            reauthenticated_at = datetime.fromtimestamp(float(payload["reauth_at"]), timezone.utc)
+            reauthentication_purpose = str(payload.get("reauth_purpose") or "")
     except (jwt.PyJWTError, KeyError, TypeError, ValueError):
         raise ApiError(401, "invalid_service_token", "Service token is invalid or expired")
     return ServiceClaims(
@@ -95,5 +113,7 @@ async def require_service_claims(authorization: str = Header(default="")) -> Ser
         scope=scope,
         dealer_ids=dealer_ids,
         team_keys=team_keys,
+        reauthenticated_at=reauthenticated_at,
+        reauthentication_purpose=reauthentication_purpose,
     )
 

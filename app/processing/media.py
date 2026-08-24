@@ -84,12 +84,18 @@ class LocalTranscriber:
         if self._model is not None:
             return
         from faster_whisper import WhisperModel
+        from faster_whisper.utils import download_model
 
-        self._model = WhisperModel(
+        model_path = download_model(
             settings.media_transcription_model,
+            local_files_only=not download,
+            revision=settings.media_transcription_model_revision,
+        )
+        self._model = WhisperModel(
+            model_path,
             device="cpu",
             compute_type=settings.media_transcription_compute_type,
-            local_files_only=not download,
+            local_files_only=True,
         )
 
     def transcribe(

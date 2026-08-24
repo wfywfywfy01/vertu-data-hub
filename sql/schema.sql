@@ -298,6 +298,25 @@ CREATE TABLE IF NOT EXISTS audit_event (
 CREATE INDEX IF NOT EXISTS idx_audit_event_object
     ON audit_event (object_type, object_id, occurred_at DESC);
 
+CREATE TABLE IF NOT EXISTS original_export_grant (
+    id                 UUID PRIMARY KEY,
+    asset_id           UUID NOT NULL REFERENCES knowledge_asset(id),
+    asset_version_id   UUID NOT NULL REFERENCES asset_version(id),
+    initiated_by       VARCHAR(160) NOT NULL,
+    idempotency_key    VARCHAR(200) NOT NULL,
+    reason             VARCHAR(500) NOT NULL,
+    reason_sha256      VARCHAR(64) NOT NULL CHECK (reason_sha256 ~ '^[0-9a-f]{64}$'),
+    request_id         VARCHAR(200),
+    reauthenticated_at TIMESTAMPTZ NOT NULL,
+    created_at         TIMESTAMPTZ NOT NULL,
+    expires_at         TIMESTAMPTZ NOT NULL,
+    consumed_at        TIMESTAMPTZ,
+    UNIQUE (initiated_by, idempotency_key),
+    CHECK (expires_at > created_at)
+);
+CREATE INDEX IF NOT EXISTS idx_original_export_grant_expiry
+    ON original_export_grant (expires_at) WHERE consumed_at IS NULL;
+
 CREATE OR REPLACE FUNCTION prevent_audit_event_mutation()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN

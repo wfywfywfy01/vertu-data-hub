@@ -18,6 +18,7 @@ from app.knowledge import assets
 from app.knowledge.scopes import resolve_scope
 from app.processing.images import ImageExtraction, extract_image
 from app.processing.redaction import redact_text
+from app.processing.sensitivity import high_sensitivity_reasons
 from app.semantic_images import analyze_images
 from app.storage import build_scoped_derived_key, get_storage
 
@@ -203,6 +204,17 @@ async def process_image_job(job_id, *, storage=None) -> dict:
             raise PermanentImageError(
                 "image_format_mismatch", "decoded image format does not match filename"
             )
+        reasons = high_sensitivity_reasons(
+            extracted.text,
+            filename=context["original_name"],
+            sensitivity=context["sensitivity"],
+        )
+        if reasons and not context["input_data"].get("sensitive_review_approved"):
+            output = {"quarantined": True, "review_reasons": reasons}
+            await assets.transition_job(
+                job_id, "succeeded", progress=100, output_data=output
+            )
+            return {"status": "awaiting_review", "retryable": False, **output}
         redacted = redact_text(extracted.text)
         extracted = replace(extracted, text=redacted.text)
         image_embedder, image_provider, image_model, image_dimension = _select_image_embedder(context)

@@ -278,6 +278,144 @@ async def get_job(
     )
 
 
+async def list_pending_reviews(*, limit: int = 100) -> list[dict]:
+    if not 1 <= limit <= 100:
+        raise ValueError("limit must be between 1 and 100")
+    return await db.fetch_all(
+        """
+        SELECT j.id AS review_id, j.output_data->'review_reasons' AS review_reasons,
+               j.created_at, a.id AS asset_id, a.title, a.category, a.sensitivity,
+               a.scope_type, a.scope_key, a.dealer_id, v.version_number
+        FROM processing_job j
+        JOIN asset_version v ON v.id = j.asset_version_id AND v.is_current
+        JOIN knowledge_asset a ON a.id = v.asset_id
+        WHERE a.status = 'awaiting_review'
+          AND j.status = 'succeeded'
+          AND coalesce((j.output_data->>'quarantined')::boolean, FALSE)
+        ORDER BY j.updated_at
+        LIMIT %s
+        """,
+        (limit,),
+    )
+
+
+async def decide_sensitive_review(
+    review_id: UUID | str,
+    *,
+    decision: str,
+    actor_id: str,
+    reason: str,
+    request_id: str | None = None,
+) -> dict:
+    if decision not in {"approve", "reject"}:
+        raise ValueError("unsupported review decision")
+    actor = _required(actor_id, "actor_id", 160)
+    review_reason = _required(reason, "reason", 500)
+    pool = await db.get_pool()
+    async with pool.connection() as conn:
+        async with conn.transaction():
+            cur = await conn.execute(
+                """
+                SELECT j.*, v.asset_id, v.is_current, a.status AS asset_status
+                FROM processing_job j
+                JOIN asset_version v ON v.id = j.asset_version_id
+                JOIN knowledge_asset a ON a.id = v.asset_id
+                WHERE j.id = %s
+                FOR UPDATE OF j, a
+                """,
+                (review_id,),
+            )
+            job = await cur.fetchone()
+            if (
+                not job
+                or not job["is_current"]
+                or job["asset_status"] != "awaiting_review"
+                or job["status"] != "succeeded"
+                or not job["output_data"].get("quarantined")
+            ):
+                raise ValueError("review is no longer pending")
+
+            if decision == "approve":
+                cur = await conn.execute(
+                    """
+                    UPDATE processing_job
+                    SET status = 'queued', progress = 0,
+                        dispatch_status = 'pending', dispatch_error = NULL,
+                        dispatched_at = NULL, finished_at = NULL,
+                        input_data = input_data || %s::jsonb,
+                        updated_at = now()
+                    WHERE id = %s
+                    RETURNING *
+                    """,
+                    (Jsonb({"sensitive_review_approved": True}), review_id),
+                )
+                updated_job = await cur.fetchone()
+                asset_status = "received"
+            else:
+                updated_job = job
+                asset_status = "deleted"
+
+            cur = await conn.execute(
+                """
+                UPDATE knowledge_asset
+                SET status = %s, updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (asset_status, job["asset_id"]),
+            )
+            updated_asset = await cur.fetchone()
+            await _audit(
+                conn,
+                actor,
+                {
+                    "approve": "asset.sensitive_review_approved",
+                    "reject": "asset.sensitive_review_rejected",
+                }[decision],
+                "knowledge_asset",
+                job["asset_id"],
+                {"review_id": str(review_id), "reason": review_reason},
+                request_id,
+            )
+            return {
+                "review_id": review_id,
+                "decision": decision,
+                "asset": updated_asset,
+                "job": updated_job,
+            }
+
+
+async def restore_sensitive_review_after_dispatch_failure(
+    review_id: UUID | str, error: str
+) -> dict:
+    pool = await db.get_pool()
+    async with pool.connection() as conn:
+        async with conn.transaction():
+            cur = await conn.execute(
+                """
+                UPDATE processing_job
+                SET status = 'succeeded', progress = 100,
+                    dispatch_status = 'failed', dispatch_error = %s,
+                    finished_at = now(), updated_at = now()
+                WHERE id = %s
+                  AND status = 'queued'
+                  AND coalesce((input_data->>'sensitive_review_approved')::boolean, FALSE)
+                  AND coalesce((output_data->>'quarantined')::boolean, FALSE)
+                RETURNING *
+                """,
+                ((error or "queue dispatch failed")[:2000], review_id),
+            )
+            job = await cur.fetchone()
+            if not job:
+                raise ValueError("approved review could not be restored")
+            await conn.execute(
+                "UPDATE knowledge_asset SET status = 'awaiting_review', updated_at = now() "
+                "WHERE id = (SELECT asset_id FROM asset_version WHERE id = %s)",
+                (job["asset_version_id"],),
+            )
+            return job
+
+
 async def mark_job_dispatch(job_id: UUID | str, status: str, error: str | None = None) -> dict:
     if status not in {"sent", "failed"}:
         raise ValueError("invalid dispatch status")
@@ -340,7 +478,12 @@ async def transition_job(
                 ),
             )
             updated = await cur.fetchone()
-            asset_status = {"running": "processing", "succeeded": "searchable", "failed": "failed"}.get(status)
+            quarantined = bool(output_data and output_data.get("quarantined"))
+            asset_status = {
+                "running": "processing",
+                "succeeded": "awaiting_review" if quarantined else "searchable",
+                "failed": "failed",
+            }.get(status)
             if asset_status:
                 await conn.execute(
                     """

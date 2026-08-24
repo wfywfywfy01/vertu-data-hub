@@ -7,7 +7,7 @@ openpyxl>=3.1
 Pillow>=10.0
 docling>=2.0
 pypdfium2>=5.12
-rapidocr>=3.9,<4
+rapidocr==3.9.2
 onnxruntime>=1.19,<2
 python-bidi>=0.6,<1
 pillow-heif>=0.18,<2

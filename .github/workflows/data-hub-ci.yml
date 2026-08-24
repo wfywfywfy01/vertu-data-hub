@@ -52,6 +52,7 @@ jobs:
       - name: Validate production Compose
         run: |
           cp .env.example .env
+          export DATA_HUB_IMAGE=registry.example/vertu-data-hub:0123456789abcdef0123456789abcdef01234567
           docker compose -f docker-compose.production.yml config --quiet
           rm .env
 
@@ -73,10 +74,11 @@ jobs:
           cache-to: type=gha,mode=max
       - name: Start container and run smoke test
         run: |
+          docker run --rm --env TRANSFORMERS_OFFLINE=1 \
+            "vertu-data-hub:${{ github.sha }}" python -m app.cli.check_models
           docker run --detach --rm --name data-hub-smoke \
             --env APP_ENV=development \
             --env API_HOST=0.0.0.0 \
-            --env SEMANTIC_IMAGE_PRELOAD=false \
             --publish 127.0.0.1:8080:8080 \
             "vertu-data-hub:${{ github.sha }}"
           trap 'docker rm --force data-hub-smoke >/dev/null 2>&1 || true' EXIT

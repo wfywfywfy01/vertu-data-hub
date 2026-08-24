@@ -6,6 +6,8 @@ import pytest
 
 from app import db
 from app.knowledge import assets, dealers
+from app.processing.documents import ExtractedDocument
+from app.workers import document as document_worker
 from app.workers.document import PIPELINE_VERSION, process_document_job
 
 
@@ -108,3 +110,30 @@ async def test_document_job_rejects_download_with_wrong_hash(document_record):
         (registered["version"]["id"],),
     )
     assert count["n"] == 0
+
+
+async def test_high_sensitivity_document_waits_for_admin_review(
+    document_record, monkeypatch
+):
+    _dealer, registered, source = document_record
+    monkeypatch.setattr(
+        document_worker,
+        "extract_document",
+        lambda _path, _language: ExtractedDocument(
+            markdown="password: SuperSecret123", chunks=[]
+        ),
+    )
+
+    result = await process_document_job(
+        registered["job"]["id"], storage=FakeStorage(source)
+    )
+
+    assert result["status"] == "awaiting_review"
+    assert result["review_reasons"] == ["password"]
+    asset = await assets.get_asset(registered["asset"]["id"])
+    assert asset["status"] == "awaiting_review"
+    chunks = await db.fetch_one(
+        "SELECT count(*) AS n FROM content_chunk WHERE asset_version_id = %s",
+        (registered["version"]["id"],),
+    )
+    assert chunks["n"] == 0

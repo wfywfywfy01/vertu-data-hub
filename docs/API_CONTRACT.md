@@ -5,8 +5,8 @@
 - 基础路径：`/v1`；仅允许 PDCA 后端和运维服务通过私网访问。
 - PDCA 服务令牌必须包含：`iss`、`aud`、`sub`、`user_id`、`role`、`scope`、`dealer_ids`、`iat`、`exp`、`jti`；部门成员增加可选 `team_keys`。
 - 令牌有效期不超过 5 分钟。知识库校验签名、受众、过期时间，并把 `dealer_ids` 作为上限再次授权。
-- 每个写请求携带 `Idempotency-Key`，每个请求携带 `X-Request-ID`。
-- 列表使用不透明 cursor；错误返回稳定 `code`、安全 `message` 和 `request_id`，不得返回密钥、SQL 或原始敏感内容。
+- 资产登记和原件导出携带 `Idempotency-Key`，每个请求携带 `X-Request-ID`。
+- 列表当前最多返回 100 项；错误返回稳定 `code`、安全 `message` 和 `request_id`，不得返回密钥、SQL 或原始敏感内容。
 
 ## 核心接口
 
@@ -19,11 +19,12 @@
 | `GET` | `/v1/assets/{asset_id}/content` | 获取脱敏文字或带水印图片预览 |
 | `POST` | `/v1/search` | 混合检索，返回片段和引用 |
 | `POST` | `/v1/answers` | 生成有引用、默认脱敏的回答 |
-| `GET` | `/v1/reviews` | 获取调用者有权处理的待确认项 |
-| `POST` | `/v1/reviews/{review_id}/decision` | 提交分类、归属或主表确认 |
+| `GET` | `/v1/reviews` | 管理员获取高敏感资料待确认项 |
+| `POST` | `/v1/reviews/{review_id}/decision` | 管理员批准重新处理或拒绝入库 |
 | `GET/POST` | `/v1/dealers` | 查询或建议经销商主表记录 |
-| `PATCH` | `/v1/dealers/{dealer_id}` | 管理员确认正式名称、合并或停用 |
-| `POST` | `/v1/exports` | 管理员确认原因后流式导出原件 |
+| `PATCH` | `/v1/dealers/{dealer_id}/confirm` | 管理员确认正式名称 |
+| `POST` | `/v1/exports` | 管理员二次认证后申请一次性原件下载 |
+| `GET` | `/v1/exports/{export_id}/download` | 在 5 分钟内使用一次性令牌下载原件 |
 | `GET` | `/v1/jobs/{job_id}` | 查询上传、处理或导出进度 |
 
 上传请求使用 `scope_type=dealer|department|company`。经销商范围传 `dealer_id`；
@@ -36,9 +37,22 @@
 最长边 1280、移除 EXIF 并写入内部水印；其他资料只返回 `content_chunk` 中再次
 脱敏的文字，响应禁止缓存。原文件不通过该接口返回。
 
-`POST /v1/exports` 仅允许 `admin`，请求必须包含 `asset_id`、至少 10 字的 `reason`
-和 `confirmation=export-original`。服务在范围授权和源对象存在性校验后流式返回原件，
-并记录脱敏原因、原因哈希、版本、敏感级别和字节数。非管理员即使知道资产 ID 也返回 403。
+`POST /v1/exports` 仅允许 `admin`，服务令牌必须包含 5 分钟内的
+`reauth_at` 和 `reauth_purpose=knowledge-original-export`。请求必须包含
+`asset_id`、至少 10 字的 `reason`、`confirmation=export-original`，并携带
+`Idempotency-Key`。接口返回一次性 `download_url` 和 `download_token`。下载请求
+通过 `X-Export-Token` 携带令牌，避免令牌进入 URL 和访问日志。原件字节保持不变；
+下载授权 5 分钟过期且成功使用后立即失效。服务记录脱敏原因、原因哈希、版本、
+敏感级别和字节数；非管理员即使知道资产 ID 也返回 403。
+
+### 高敏感资料确认
+
+文档、图片 OCR 和音视频转写在建立向量前检测密码、API 密钥、私钥、身份证号、
+银行卡号、敏感文件名和 `restricted` 标记。命中后资产进入 `awaiting_review`，不生成
+检索片段。仅 `admin` 可通过 `/v1/reviews` 查看并批准或拒绝：批准后原任务重新排队，
+拒绝后资产逻辑删除；两种决定都写入追加式审计。
+管理员可在决定前使用同一套二次认证、用途说明和一次性令牌下载待确认原件；普通
+预览和检索仍拒绝 `awaiting_review` 资产。
 
 ### 混合检索
 
@@ -88,8 +102,8 @@ Chinese-CLIP 图文向量检索。授权范围、当前版本、`searchable` 状
 
 | 角色 | 默认范围 | 能力 |
 |---|---|---|
-| `sales` | 已分配经销商 | 上传、查询、提出主表修改、处理本人范围待确认 |
-| `manager` | 明确配置的团队 | 查询团队、处理团队待确认 |
+| `sales` | 已分配经销商 | 上传、查询、提出主表修改 |
+| `manager` | 明确配置的团队 | 上传、查询团队资料 |
 | `admin` | 全部 | 主表最终确认、合并、停用、敏感导出和审计 |
 | `viewer/dealer` | 无或显式分配 | 仅脱敏读取；默认不开放上传和确认 |
 

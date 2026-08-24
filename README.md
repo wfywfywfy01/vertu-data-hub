@@ -26,10 +26,8 @@ API 需要 PDCA 服务令牌密钥。开发环境在 `.env` 设置至少 32 字�
 docker compose up -d redis
 ```
 
-本机试点查询页：`http://127.0.0.1:8080/ui`。页面支持经销商和资料分类筛选、
-图片缩略图与原图预览、脱敏片段、相关度及原始文件引用；只在 `development` 环境
-且仅对 loopback 请求开放。
-生产用户界面由 PDCA 提供身份与权限后调用私有 API，不使用该本机入口。
+正式查询页由 PDCA 提供：`/app/knowledge`。本仓库只提供私有 `/v1` 数据 API、
+带水印图片预览、脱敏片段、相关度及原始文件引用。用户浏览器不直接访问本服务。
 
 开发环境接口文档：`http://127.0.0.1:8080/docs`。当前已支持经销商主表、OSS
 签名直传、上传完成校验、资产版本、Celery 路由，以及 PDF/DOCX/PPTX/XLSX/
@@ -49,7 +47,7 @@ Russian OCR 模型应在联网构建环境预热后再部署到离线生产 work
 python -m app.cli.index_semantic_images --dealer "VMG Communication and Technology Joint Stock Company"
 ```
 
-`POST /v1/search` 和本机 `/ui/api/search` 遇到图片分类或图片意图时自动切换到
+`POST /v1/search` 遇到图片分类或图片意图时自动切换到
 本地图文检索，返回画面匹配度、质量分、标签、原图引用及待人工确认的社媒配文草稿；
 没有语义索引时回退到原文字检索。默认在 API 启动时加载模型，模型缺失会阻止
 readiness，避免把冷启动时间留给首个用户请求。

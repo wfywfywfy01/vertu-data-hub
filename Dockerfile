@@ -26,5 +26,10 @@ COPY --chown=app:app . .
 RUN mkdir -p /models/huggingface && chown -R app:app /models
 
 USER app
+RUN python -m app.cli.preload_ocr \
+    && python -m app.cli.preload_semantic_images \
+    && python -m app.cli.preload_media \
+    && TRANSFORMERS_OFFLINE=1 python -m app.cli.check_models
+
 EXPOSE 8080
 CMD ["python", "run_api.py"]

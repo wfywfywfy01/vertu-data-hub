@@ -1,6 +1,7 @@
 """环境变量配置。全部配置从 .env / 环境变量读取，代码中不出现明文密钥。"""
 import os
 from pathlib import Path
+import re
 from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
@@ -43,6 +44,9 @@ class Settings:
 
     # 本地音视频转写与关键帧。
     media_transcription_model: str = _env("MEDIA_TRANSCRIPTION_MODEL", "small")
+    media_transcription_model_revision: str = _env(
+        "MEDIA_TRANSCRIPTION_MODEL_REVISION", "536b0662742c02347bc0e980a01041f333bce120"
+    )
     media_transcription_compute_type: str = _env("MEDIA_TRANSCRIPTION_COMPUTE_TYPE", "int8")
     media_keyframe_interval_seconds: int = int(_env("MEDIA_KEYFRAME_INTERVAL_SECONDS", "30"))
     media_max_keyframes: int = int(_env("MEDIA_MAX_KEYFRAMES", "60"))
@@ -83,6 +87,9 @@ class Settings:
     # vertu-cli（skill 取数）
     vertu_cli_bin: str = _env("VERTU_CLI_BIN", "vertu-cli")
 
+    # Production Compose passes its immutable image reference for fail-closed validation.
+    data_hub_image: str = _env("DATA_HUB_IMAGE")
+
 
 settings = Settings()
 
@@ -103,6 +110,11 @@ def validate_production_settings(value: Settings = settings) -> None:
         return
 
     errors = []
+    image = getattr(value, "data_hub_image", "")
+    digest_image = re.search(r"@sha256:[0-9a-f]{64}$", image)
+    commit_tagged_image = re.search(r":[0-9a-f]{7,40}$", image)
+    if not (digest_image or commit_tagged_image):
+        errors.append("DATA_HUB_IMAGE must use a sha256 digest or commit tag")
     db_host = (urlsplit(value.database_url).hostname or "").lower()
     if db_host in {"", "localhost", "127.0.0.1", "db"}:
         errors.append("DATABASE_URL must point to the production PostgreSQL host")

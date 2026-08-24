@@ -15,6 +15,7 @@ from app.knowledge import assets
 from app.knowledge.scopes import resolve_scope
 from app.processing.media import extract_keyframes, get_transcriber, probe_media
 from app.processing.redaction import redact_text
+from app.processing.sensitivity import high_sensitivity_reasons
 from app.semantic_images import analyze_images
 from app.storage import build_scoped_derived_key, file_hash, get_storage
 
@@ -159,6 +160,17 @@ async def process_media_job(job_id, *, storage=None) -> dict:
                     raise PermanentMediaError(
                         "transcription_model_unavailable", "local transcription model is unavailable"
                     ) from exc
+            reasons = high_sensitivity_reasons(
+                "\n".join(segment.text for segment in segments),
+                filename=context["original_name"],
+                sensitivity=context["sensitivity"],
+            )
+            if reasons and not context["input_data"].get("sensitive_review_approved"):
+                output = {"quarantined": True, "review_reasons": reasons}
+                await assets.transition_job(
+                    job_id, "succeeded", progress=100, output_data=output
+                )
+                return {"status": "awaiting_review", "retryable": False, **output}
             keyframes = (
                 await asyncio.to_thread(extract_keyframes, source_path, probe.duration)
                 if probe.has_video
