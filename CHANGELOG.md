@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added a runtime guard that prevents local semantic-image model loading on memory-constrained shared hosts while retaining OCR retrieval and previews.
 - Added fast lexical retrieval fallback when the embedding API is unavailable and a fixed-endpoint DeepSeek answer provider for restricted cloud networks.
 - Added low-cardinality Prometheus HTTP metrics and verified atomic PostgreSQL backups with retention.
 - Added scoped metadata-free image and redacted text previews plus reason-confirmed, admin-only original exports with append-only audits.

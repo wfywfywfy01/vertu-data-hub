@@ -91,3 +91,26 @@ async def test_image_router_falls_back_when_semantic_index_is_empty(monkeypatch)
 
     assert len(rows) == 1
     assert calls == ["images", "knowledge"]
+
+
+async def test_image_router_skips_local_model_when_disabled(monkeypatch):
+    calls = []
+
+    async def images(query, **kwargs):
+        calls.append("images")
+        return []
+
+    async def knowledge(query, **kwargs):
+        calls.append("knowledge")
+        return [{"asset_id": uuid4()}]
+
+    monkeypatch.setattr(search_router.settings, "semantic_image_query_enabled", False)
+    monkeypatch.setattr(search_router, "search_images", images)
+    monkeypatch.setattr(search_router, "search_knowledge", knowledge)
+
+    rows = await search_router.search_assets(
+        "找发布会照片", dealer_ids=[], actor_id="pytest"
+    )
+
+    assert len(rows) == 1
+    assert calls == ["knowledge"]
