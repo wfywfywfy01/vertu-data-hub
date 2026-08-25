@@ -33,15 +33,14 @@ class Settings:
     image_embedding_api_key: str = _env("IMAGE_EMBEDDING_API_KEY")
     image_embedding_model: str = _env("IMAGE_EMBEDDING_MODEL", "multimodal-embedding-v1")
     image_embedding_dim: int = int(_env("IMAGE_EMBEDDING_DIM", "1024"))
+    image_embedding_timeout_seconds: float = float(
+        _env("IMAGE_EMBEDDING_TIMEOUT_SECONDS", "20")
+    )
     allow_external_image_processing: bool = _env(
         "ALLOW_EXTERNAL_IMAGE_PROCESSING", "false"
     ).lower() in {"1", "true", "yes"}
 
-    # 本地中文图文语义检索。模型版本在实现中固定，原图不离开本机/私有部署环境。
-    semantic_image_batch_size: int = int(_env("SEMANTIC_IMAGE_BATCH_SIZE", "4"))
-    semantic_image_preload: bool = _env("SEMANTIC_IMAGE_PRELOAD", "true").lower() in {
-        "1", "true", "yes"
-    }
+    # 多模态图片检索总开关。关闭时仍保留 OCR/文件名文字检索。
     semantic_image_query_enabled: bool = _env(
         "SEMANTIC_IMAGE_QUERY_ENABLED", "true"
     ).lower() in {"1", "true", "yes"}
@@ -106,10 +105,10 @@ def validate_production_settings(value: Settings = settings) -> None:
     signed_seconds = getattr(value, "oss_signed_url_seconds", 900)
     if not 60 <= signed_seconds <= 3600:
         raise RuntimeError("OSS_SIGNED_URL_SECONDS must be between 60 and 3600")
-    if not 1 <= getattr(value, "semantic_image_batch_size", 4) <= 32:
-        raise RuntimeError("SEMANTIC_IMAGE_BATCH_SIZE must be between 1 and 32")
     if not 1 <= getattr(value, "embedding_timeout_seconds", 10) <= 60:
         raise RuntimeError("EMBEDDING_TIMEOUT_SECONDS must be between 1 and 60")
+    if not 1 <= getattr(value, "image_embedding_timeout_seconds", 20) <= 60:
+        raise RuntimeError("IMAGE_EMBEDDING_TIMEOUT_SECONDS must be between 1 and 60")
     if not 5 <= getattr(value, "media_keyframe_interval_seconds", 30) <= 600:
         raise RuntimeError("MEDIA_KEYFRAME_INTERVAL_SECONDS must be between 5 and 600")
     if not 1 <= getattr(value, "media_max_keyframes", 60) <= 300:
@@ -151,16 +150,19 @@ def validate_production_settings(value: Settings = settings) -> None:
         or not value.embedding_api_key
     ):
         errors.append("production text embedding API is required")
-    allow_external_images = getattr(value, "allow_external_image_processing", False)
-    if allow_external_images:
-        if (
-            value.image_embedding_provider != "api"
-            or not value.image_embedding_base_url
-            or not value.image_embedding_api_key
-        ):
-            errors.append("external image processing requires the image embedding API")
-    elif value.image_embedding_provider != "hash":
-        errors.append("IMAGE_EMBEDDING_PROVIDER must be hash when external image processing is disabled")
+    if (
+        value.image_embedding_provider != "api"
+        or not value.image_embedding_base_url
+        or not value.image_embedding_api_key
+        or not getattr(value, "image_embedding_model", "")
+    ):
+        errors.append("production multimodal image embedding API is required")
+    if urlsplit(getattr(value, "image_embedding_base_url", "")).scheme != "https":
+        errors.append("IMAGE_EMBEDDING_BASE_URL must use HTTPS")
+    if getattr(value, "image_embedding_dim", 0) != 1024:
+        errors.append("IMAGE_EMBEDDING_DIM must be 1024")
+    if not getattr(value, "allow_external_image_processing", False):
+        errors.append("ALLOW_EXTERNAL_IMAGE_PROCESSING=true is required in production")
     if getattr(value, "allow_external_text_generation", False):
         provider = getattr(value, "answer_provider", "disabled")
         if provider not in {"openrouter", "deepseek"}:

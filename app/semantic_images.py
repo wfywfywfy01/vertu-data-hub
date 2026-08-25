@@ -1,58 +1,15 @@
-"""Build local semantic vectors and visual labels for processed images."""
+"""Backfill cloud multimodal vectors for processed images."""
 from __future__ import annotations
 
 import asyncio
-from functools import lru_cache
 from uuid import UUID
-
-from psycopg.types.json import Jsonb
 
 from app import db
 from app.config import settings
-from app.embeddings.chinese_clip import MODEL_ID, get_chinese_clip, image_quality
+from app.embeddings.image import get_image_embedder
 from app.embeddings.text import vector_literal
+from app.processing.images import image_quality
 from app.storage import LocalStorage, get_storage
-
-
-LABELS = (
-    "模特展示手机",
-    "产品特写",
-    "嘉宾合影",
-    "舞台全景",
-    "嘉宾发言",
-    "现场观众",
-    "品牌背景板",
-    "邀请函海报",
-    "手机截图",
-)
-
-
-def _dot(left: list[float], right: list[float]) -> float:
-    return sum(a * b for a, b in zip(left, right))
-
-
-@lru_cache(maxsize=1)
-def _label_vectors() -> tuple[tuple[float, ...], ...]:
-    rows = get_chinese_clip().embed_texts(list(LABELS))
-    return tuple(tuple(row) for row in rows)
-
-
-def analyze_images(images: list[bytes]) -> list[tuple[list[float], float, list[dict]]]:
-    vectors = get_chinese_clip().embed_images(images)
-    label_vectors = _label_vectors()
-    results = []
-    for data, vector in zip(images, vectors):
-        ranked = sorted(
-            (
-                (label, _dot(vector, list(label_vector)))
-                for label, label_vector in zip(LABELS, label_vectors)
-            ),
-            key=lambda item: item[1],
-            reverse=True,
-        )[:3]
-        labels = [{"label": label, "score": round(score, 6)} for label, score in ranked]
-        results.append((vector, image_quality(data), labels))
-    return results
 
 
 async def index_semantic_images(
@@ -62,7 +19,16 @@ async def index_semantic_images(
     scope_key: str | None = None,
     force: bool = False,
 ) -> int:
-    conditions = ["a.status = 'searchable'", "v.is_current"]
+    if settings.image_embedding_provider != "api":
+        raise RuntimeError("IMAGE_EMBEDDING_PROVIDER=api is required")
+    if not settings.allow_external_image_processing:
+        raise RuntimeError("ALLOW_EXTERNAL_IMAGE_PROCESSING=true is required")
+
+    conditions = [
+        "a.status = 'searchable'",
+        "v.is_current",
+        "a.sensitivity IN ('internal', 'confidential')",
+    ]
     params: list = []
     if dealer_id is not None:
         conditions.append("a.dealer_id = %s")
@@ -71,10 +37,18 @@ async def index_semantic_images(
         conditions.extend(["a.scope_type = %s", "a.scope_key = %s"])
         params.extend([scope_type, scope_key])
     if not force:
-        conditions.append("ie.semantic_embedding IS NULL")
+        conditions.append(
+            "((ie.embedding_provider, ie.embedding_model, ie.embedding_dimension) "
+            "IS DISTINCT FROM (%s, %s, %s))"
+        )
+        params.extend([
+            settings.image_embedding_provider,
+            settings.image_embedding_model,
+            settings.image_embedding_dim,
+        ])
     rows = await db.fetch_all(
         f"""
-        SELECT ie.asset_version_id, s.bucket, s.object_key
+        SELECT ie.id, ie.asset_version_id, s.bucket, s.object_key
         FROM image_embedding ie
         JOIN asset_version v ON v.id = ie.asset_version_id
         JOIN knowledge_asset a ON a.id = v.asset_id
@@ -89,41 +63,40 @@ async def index_semantic_images(
 
     local_storage = LocalStorage()
     remote_storage = None
+    embedder = get_image_embedder()
     indexed = 0
-    size = settings.semantic_image_batch_size
-
-    for start in range(0, len(rows), size):
-        batch = rows[start : start + size]
-        image_bytes = []
-        for row in batch:
-            if row["bucket"] == "local-inbox":
-                storage = local_storage
-            else:
-                remote_storage = remote_storage or get_storage()
-                storage = remote_storage
-            image_bytes.append(
-                await asyncio.to_thread(storage.download_bytes, row["object_key"])
-            )
-        metadata = await asyncio.to_thread(analyze_images, image_bytes)
-        for row, (vector, quality, labels) in zip(batch, metadata):
-            await db.execute(
-                """
-                UPDATE image_embedding SET
-                    semantic_embedding = %s::vector,
-                    semantic_provider = 'local',
-                    semantic_model = %s,
-                    quality_score = %s,
-                    semantic_labels = %s,
-                    semantic_indexed_at = now()
-                WHERE asset_version_id = %s
-                """,
-                (
-                    vector_literal(vector),
-                    MODEL_ID,
-                    quality,
-                    Jsonb(labels),
-                    row["asset_version_id"],
-                ),
-            )
-            indexed += 1
+    for row in rows:
+        if row["bucket"] == "local-inbox":
+            storage = local_storage
+        else:
+            remote_storage = remote_storage or get_storage()
+            storage = remote_storage
+        data = await asyncio.to_thread(storage.download_bytes, row["object_key"])
+        vector = await embedder.embed_image(data)
+        quality = await asyncio.to_thread(image_quality, data)
+        await db.execute(
+            """
+            UPDATE image_embedding SET
+                embedding = %s::vector,
+                embedding_provider = %s,
+                embedding_model = %s,
+                embedding_dimension = %s,
+                semantic_embedding = NULL,
+                semantic_provider = NULL,
+                semantic_model = NULL,
+                quality_score = %s,
+                semantic_labels = '[]'::jsonb,
+                semantic_indexed_at = NULL
+            WHERE id = %s
+            """,
+            (
+                vector_literal(vector),
+                settings.image_embedding_provider,
+                settings.image_embedding_model,
+                settings.image_embedding_dim,
+                quality,
+                row["id"],
+            ),
+        )
+        indexed += 1
     return indexed

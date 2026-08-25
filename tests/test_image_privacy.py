@@ -16,3 +16,19 @@ def test_restricted_image_never_uses_configured_cloud_embedder(monkeypatch):
 
     assert isinstance(embedder, image.HashImageEmbedder)
     assert (provider, model, dimension) == ("hash", "hash-color-grid-v1", 1024)
+
+
+def test_confidential_image_uses_cloud_when_explicitly_enabled(monkeypatch):
+    configured = object()
+    monkeypatch.setattr(image.settings, "image_embedding_provider", "api")
+    monkeypatch.setattr(image.settings, "allow_external_image_processing", True)
+    monkeypatch.setattr(image, "get_image_embedder", lambda: configured)
+
+    embedder, provider, model, dimension = image._select_image_embedder(
+        {"sensitivity": "confidential"}
+    )
+
+    assert embedder is configured
+    assert (provider, model, dimension) == (
+        "api", image.settings.image_embedding_model, 1024
+    )

@@ -14,9 +14,9 @@ from app.embeddings.text import get_text_embedder, vector_literal
 from app.knowledge import assets
 from app.knowledge.scopes import resolve_scope
 from app.processing.media import extract_keyframes, get_transcriber, probe_media
+from app.processing.images import extract_image
 from app.processing.redaction import redact_text
 from app.processing.sensitivity import high_sensitivity_reasons
-from app.semantic_images import analyze_images
 from app.storage import build_scoped_derived_key, file_hash, get_storage
 
 
@@ -203,28 +203,26 @@ async def process_media_job(job_id, *, storage=None) -> dict:
                     "content_type": "text/markdown", "size": len(markdown),
                 })
 
-            for start in range(0, len(keyframes), settings.semantic_image_batch_size):
-                batch = keyframes[start : start + settings.semantic_image_batch_size]
-                metadata = await asyncio.to_thread(analyze_images, [data for _time, data in batch])
-                for offset, ((timestamp, data), (_vector, _quality, labels)) in enumerate(zip(batch, metadata)):
-                    index = start + offset
-                    label_text = "、".join(item["label"] for item in labels)
-                    records.append({
-                        "text": f"视频画面：{label_text}",
-                        "section": "视频关键帧",
-                        "start": timestamp,
-                        "end": timestamp,
-                        "source": "video_keyframe",
-                    })
-                    key = build_scoped_derived_key(
-                        scope, context["asset_version_id"], f"keyframe-{index:03d}.jpg"
-                    )
-                    await asyncio.to_thread(storage.put_object, key, data, content_type="image/jpeg")
-                    artifacts.append({
-                        "type": f"keyframe-{index:03d}", "key": key,
-                        "hash": hashlib.sha256(data).hexdigest(), "content_type": "image/jpeg",
-                        "size": len(data),
-                    })
+            for index, (timestamp, data) in enumerate(keyframes):
+                frame = await asyncio.to_thread(extract_image, data, context["language_code"])
+                redacted = redact_text(frame.text)
+                redaction_count += redacted.count
+                records.append({
+                    "text": f"视频画面：{redacted.text or '关键帧'}",
+                    "section": "视频关键帧",
+                    "start": timestamp,
+                    "end": timestamp,
+                    "source": "video_keyframe",
+                })
+                key = build_scoped_derived_key(
+                    scope, context["asset_version_id"], f"keyframe-{index:03d}.jpg"
+                )
+                await asyncio.to_thread(storage.put_object, key, data, content_type="image/jpeg")
+                artifacts.append({
+                    "type": f"keyframe-{index:03d}", "key": key,
+                    "hash": hashlib.sha256(data).hexdigest(), "content_type": "image/jpeg",
+                    "size": len(data),
+                })
 
             if not records:
                 raise PermanentMediaError("media_has_no_content", "media has no transcript or keyframes")

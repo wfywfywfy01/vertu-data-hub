@@ -2,12 +2,11 @@
 
 ## Unreleased
 
-- Added a runtime guard that prevents local semantic-image model loading on memory-constrained shared hosts while retaining OCR retrieval and previews.
+- Replaced local Chinese-CLIP/PyTorch image retrieval with DashScope multimodal embeddings, strict sensitivity routing, API fallback, and idempotent backfill.
 - Added fast lexical retrieval fallback when the embedding API is unavailable and a fixed-endpoint DeepSeek answer provider for restricted cloud networks.
 - Added low-cardinality Prometheus HTTP metrics and verified atomic PostgreSQL backups with retention.
 - Added scoped metadata-free image and redacted text previews plus reason-confirmed, admin-only original exports with append-only audits.
 - Added local audio transcription, video keyframes, time-coded citations, media-derived artifacts, Celery/local ingestion routing, and model preloading.
-- Added pinned local Chinese-CLIP text-to-image retrieval, automatic image indexing, quality-aware ranking, visual labels, social caption drafts, scoped API routing, and human UI results.
 - Added a loopback-only pilot query UI with dealer/category filters, managed image previews, redacted cited results, responsive layouts, and production fail-closed access.
 - Added dealer, department, and company knowledge scopes with scoped ingestion, storage, API authorization, retrieval, and backward-compatible migration.
 - Added guarded Chinese bigram fallback retrieval for compound dealer questions when strict full-text search returns no rows.
@@ -30,6 +29,6 @@
 
 ### Verification
 
-- `python -m pytest -q`: 106 passed.
-- VMG: 52/52 images indexed; social-media query top four are `image12.png`, `image14.png`, `image09.png`, and `image08.png`.
-- Playwright desktop and 390px mobile: no horizontal overflow, 8/8 images loaded, zero console errors.
+- `python -m pytest -q`: 114 passed.
+- Compilation, dependency, repeatable schema, development Compose, and production Compose checks passed.
+- Cloud image backfill and retrieval acceptance remain pending a DashScope API key.

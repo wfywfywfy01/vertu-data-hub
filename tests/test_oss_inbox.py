@@ -82,3 +82,35 @@ def test_production_settings_reject_unreadable_service_key(tmp_path):
 
     with pytest.raises(RuntimeError, match="readable file"):
         validate_production_settings(invalid)
+
+
+def test_production_requires_cloud_multimodal_embedding(tmp_path):
+    key_file = tmp_path / "service.key"
+    key_file.write_text("x" * 32, encoding="utf-8")
+    values = SimpleNamespace(
+        app_env="production",
+        data_hub_image="registry/data-hub:1234567",
+        database_url="postgresql://user:pass@db.internal:5432/app",
+        oss_access_key_id="id",
+        oss_access_key_secret="secret",
+        oss_endpoint="oss.internal",
+        oss_bucket="bucket",
+        service_token_key_file=str(key_file),
+        service_token_secret="",
+        redis_url="redis://redis.internal:6379/0",
+        embedding_provider="api",
+        embedding_base_url="https://embedding.internal/v1",
+        embedding_api_key="key",
+        image_embedding_provider="api",
+        image_embedding_base_url="https://dashscope.aliyuncs.com/api/v1",
+        image_embedding_api_key="image-key",
+        image_embedding_model="multimodal-embedding-v1",
+        image_embedding_dim=1024,
+        allow_external_image_processing=True,
+    )
+
+    validate_production_settings(values)
+    values.image_embedding_provider = "hash"
+
+    with pytest.raises(RuntimeError, match="multimodal image embedding API"):
+        validate_production_settings(values)

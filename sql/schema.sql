@@ -225,8 +225,7 @@ CREATE INDEX IF NOT EXISTS idx_image_embedding_dealer
 CREATE INDEX IF NOT EXISTS idx_image_embedding_vector
     ON image_embedding USING hnsw (embedding vector_cosine_ops);
 
--- Local Chinese-CLIP vectors share the same image row but remain separate from
--- the legacy 1024-dimension color-grid embedding.
+-- Legacy local semantic fields remain for backward-compatible migrations.
 ALTER TABLE image_embedding ADD COLUMN IF NOT EXISTS semantic_embedding vector(512);
 ALTER TABLE image_embedding ADD COLUMN IF NOT EXISTS semantic_provider VARCHAR(40);
 ALTER TABLE image_embedding ADD COLUMN IF NOT EXISTS semantic_model VARCHAR(160);

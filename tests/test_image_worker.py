@@ -8,6 +8,7 @@ import pytest
 from app import db
 from app.knowledge import assets, dealers
 from app.processing.images import ImageExtraction
+from app.embeddings.image import ImageEmbeddingUnavailableError
 from app.workers import image as image_worker
 
 
@@ -29,15 +30,8 @@ class FakeImageEmbedder:
 
 
 @pytest.fixture(autouse=True)
-def fake_semantic_images(monkeypatch):
-    monkeypatch.setattr(
-        image_worker,
-        "analyze_images",
-        lambda images: [
-            ([0.0] * 512, 0.8, [{"label": "产品特写", "score": 0.6}])
-            for _image in images
-        ],
-    )
+def fake_image_quality(monkeypatch):
+    monkeypatch.setattr(image_worker, "image_quality", lambda _data: 0.8)
 
 
 @pytest.fixture
@@ -118,7 +112,9 @@ async def test_image_job_creates_ocr_chunk_vector_and_searchable_asset(
     )
     assert vector["ocr_language"] == "arabic"
     assert vector["ocr_line_count"] == 2
-    assert vector["semantic_model"] == "OFA-Sys/chinese-clip-vit-base-patch16"
+    assert vector["semantic_model"] is None
+    assert vector["semantic_embedding"] is None
+    assert vector["semantic_labels"] == []
     assert vector["quality_score"] == pytest.approx(0.8)
     artifact = await db.fetch_one(
         "SELECT * FROM derived_artifact WHERE asset_version_id = %s",
@@ -177,3 +173,43 @@ async def test_image_without_text_still_saves_visual_embedding(image_record, mon
         (registered["version"]["id"],),
     )
     assert vector is not None
+
+
+async def test_image_job_keeps_ocr_when_cloud_embedding_is_unavailable(
+    image_record, monkeypatch
+):
+    _dealer, registered, source = image_record
+    extracted = ImageExtraction(
+        text="event photo",
+        line_count=1,
+        mean_confidence=0.9,
+        width=320,
+        height=120,
+        image_format="png",
+        ocr_language="default",
+    )
+
+    class UnavailableEmbedder:
+        async def embed_image(self, _data):
+            raise ImageEmbeddingUnavailableError("offline")
+
+    monkeypatch.setattr(image_worker, "extract_image", lambda _data, _language: extracted)
+    monkeypatch.setattr(image_worker.settings, "image_embedding_provider", "api")
+    monkeypatch.setattr(image_worker.settings, "allow_external_image_processing", True)
+    monkeypatch.setattr(image_worker, "get_image_embedder", lambda: UnavailableEmbedder())
+
+    result = await image_worker.process_image_job(
+        registered["job"]["id"], storage=FakeStorage(source)
+    )
+    vector = await db.fetch_one(
+        "SELECT embedding_provider, embedding_model FROM image_embedding "
+        "WHERE asset_version_id = %s",
+        (registered["version"]["id"],),
+    )
+
+    assert result["status"] == "succeeded"
+    assert result["image_embedding_provider"] == "hash"
+    assert vector == {
+        "embedding_provider": "hash",
+        "embedding_model": "hash-color-grid-v1",
+    }
