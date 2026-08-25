@@ -6,6 +6,7 @@ import pytest
 from app import db
 from app.config import settings
 from app.knowledge import assets, dealers
+from app.processing.images import ImageExtraction
 from app.workers import media as media_worker
 from app.processing.media import TranscriptSegment
 from tests.media_fixtures import sample_audio, sample_video
@@ -102,11 +103,11 @@ async def test_video_job_creates_keyframe_chunks_and_artifacts(media_record, mon
     monkeypatch.setattr(settings, "media_max_keyframes", 3)
     monkeypatch.setattr(
         media_worker,
-        "analyze_images",
-        lambda images: [
-            ([0.0] * 512, 0.8, [{"label": "舞台全景", "score": 0.6}])
-            for _image in images
-        ],
+        "extract_image",
+        lambda _data, _language: ImageExtraction(
+            text="舞台全景", line_count=1, mean_confidence=0.9,
+            width=64, height=64, image_format="jpeg", ocr_language="default",
+        ),
     )
 
     result = await media_worker.process_media_job(registered["job"]["id"], storage=storage)

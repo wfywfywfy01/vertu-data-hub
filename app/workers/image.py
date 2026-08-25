@@ -11,15 +11,17 @@ from psycopg.types.json import Jsonb
 from app import db
 from app.chunking import chunk_markdown
 from app.config import settings
-from app.embeddings.chinese_clip import MODEL_ID
-from app.embeddings.image import HashImageEmbedder, get_image_embedder
+from app.embeddings.image import (
+    HashImageEmbedder,
+    ImageEmbeddingUnavailableError,
+    get_image_embedder,
+)
 from app.embeddings.text import get_text_embedder, vector_literal
 from app.knowledge import assets
 from app.knowledge.scopes import resolve_scope
-from app.processing.images import ImageExtraction, extract_image
+from app.processing.images import ImageExtraction, extract_image, image_quality
 from app.processing.redaction import redact_text
 from app.processing.sensitivity import high_sensitivity_reasons
-from app.semantic_images import analyze_images
 from app.storage import build_scoped_derived_key, get_storage
 
 
@@ -46,7 +48,7 @@ def _select_image_embedder(context: dict):
     external_allowed = (
         provider == "api"
         and settings.allow_external_image_processing
-        and context["sensitivity"] == "internal"
+        and context["sensitivity"] in {"internal", "confidential"}
     )
     if provider == "hash" or external_allowed:
         embedder = get_image_embedder()
@@ -70,10 +72,9 @@ async def _save_output(
     artifact_hash: str | None,
     artifact_size: int | None,
     image_identity: tuple[str, str, int],
-    semantic_metadata: tuple[list[float], float, list[dict]],
+    quality_score: float,
 ) -> None:
     image_provider, image_model, image_dimension = image_identity
-    semantic_vector, quality_score, semantic_labels = semantic_metadata
     text_provider = settings.embedding_provider
     text_model = settings.embedding_model if text_provider == "api" else "hash-ngram-v1"
     chunks = chunk_markdown(extracted.text)
@@ -137,7 +138,7 @@ async def _save_output(
                      semantic_embedding, semantic_provider, semantic_model, quality_score,
                      semantic_labels, semantic_indexed_at)
                 VALUES (%s, %s, %s::vector, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s::vector, 'local', %s, %s, %s, now())
+                        NULL, NULL, NULL, %s, '[]'::jsonb, NULL)
                 ON CONFLICT (asset_version_id, pipeline_version) DO UPDATE SET
                     embedding = EXCLUDED.embedding,
                     embedding_provider = EXCLUDED.embedding_provider,
@@ -149,12 +150,12 @@ async def _save_output(
                     ocr_language = EXCLUDED.ocr_language,
                     ocr_line_count = EXCLUDED.ocr_line_count,
                     ocr_mean_confidence = EXCLUDED.ocr_mean_confidence,
-                    semantic_embedding = EXCLUDED.semantic_embedding,
-                    semantic_provider = EXCLUDED.semantic_provider,
-                    semantic_model = EXCLUDED.semantic_model,
+                    semantic_embedding = NULL,
+                    semantic_provider = NULL,
+                    semantic_model = NULL,
                     quality_score = EXCLUDED.quality_score,
-                    semantic_labels = EXCLUDED.semantic_labels,
-                    semantic_indexed_at = now(),
+                    semantic_labels = '[]'::jsonb,
+                    semantic_indexed_at = NULL,
                     created_at = now()
                 """,
                 (
@@ -163,8 +164,7 @@ async def _save_output(
                     extracted.width, extracted.height, extracted.image_format,
                     extracted.ocr_language, extracted.line_count, extracted.mean_confidence,
                     PIPELINE_VERSION,
-                    vector_literal(semantic_vector), MODEL_ID,
-                    quality_score, Jsonb(semantic_labels),
+                    quality_score,
                 ),
             )
             await conn.execute(
@@ -218,8 +218,14 @@ async def process_image_job(job_id, *, storage=None) -> dict:
         redacted = redact_text(extracted.text)
         extracted = replace(extracted, text=redacted.text)
         image_embedder, image_provider, image_model, image_dimension = _select_image_embedder(context)
-        image_vector = await image_embedder.embed_image(source)
-        semantic_metadata = (await asyncio.to_thread(analyze_images, [source]))[0]
+        try:
+            image_vector = await image_embedder.embed_image(source)
+        except ImageEmbeddingUnavailableError:
+            image_embedder = HashImageEmbedder(settings.image_embedding_dim)
+            image_provider = "hash"
+            image_model = "hash-color-grid-v1"
+            image_vector = await image_embedder.embed_image(source)
+        quality_score = await asyncio.to_thread(image_quality, source)
         chunks = chunk_markdown(extracted.text)
         text_vectors = await get_text_embedder().embed([chunk.text for chunk in chunks]) if chunks else []
 
@@ -252,13 +258,14 @@ async def process_image_job(job_id, *, storage=None) -> dict:
             artifact_hash=artifact_hash,
             artifact_size=artifact_size,
             image_identity=(image_provider, image_model, image_dimension),
-            semantic_metadata=semantic_metadata,
+            quality_score=quality_score,
         )
         output = {
             "ocr_line_count": extracted.line_count,
             "artifact_key": artifact_key,
             "pipeline_version": PIPELINE_VERSION,
             "redaction_count": redacted.count,
+            "image_embedding_provider": image_provider,
         }
         await assets.transition_job(job_id, "succeeded", progress=100, output_data=output)
         return {"status": "succeeded", "retryable": False, **output}

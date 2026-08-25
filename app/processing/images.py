@@ -100,3 +100,22 @@ def extract_image(data: bytes, language_code: str | None = None) -> ImageExtract
         image_format=image_format,
         ocr_language=language,
     )
+
+
+def image_quality(data: bytes) -> float:
+    """Cheap local quality signal for resolution, sharpness, and exposure."""
+    from PIL import ImageFilter, ImageStat
+
+    image, _image_format = _open_image(data)
+    try:
+        width, height = image.size
+        grayscale = image.convert("L")
+        resolution = min(1.0, min(width, height) / 1080.0)
+        grayscale.thumbnail((512, 512))
+        mean = ImageStat.Stat(grayscale).mean[0]
+        exposure = max(0.0, 1.0 - abs(mean - 127.5) / 127.5)
+        edges = grayscale.filter(ImageFilter.FIND_EDGES)
+        sharpness = min(1.0, ImageStat.Stat(edges).stddev[0] / 45.0)
+    finally:
+        image.close()
+    return round(0.35 * resolution + 0.35 * sharpness + 0.30 * exposure, 6)

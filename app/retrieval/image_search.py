@@ -1,14 +1,14 @@
 """Authorized local text-to-image semantic retrieval."""
 from __future__ import annotations
 
-import asyncio
 import hashlib
 from uuid import UUID
 
 from psycopg.types.json import Jsonb
 
 from app import db
-from app.embeddings.chinese_clip import get_chinese_clip
+from app.config import settings
+from app.embeddings.image import get_image_embedder
 from app.embeddings.text import vector_literal
 from app.knowledge.scopes import authorized_scope_sql
 from app.processing.redaction import redact_text
@@ -27,15 +27,16 @@ def is_image_query(query: str, category: str | None = None) -> bool:
 
 def visual_query(query: str) -> str:
     """Turn conversational publishing requests into concrete visual attributes."""
-    value = str(query or "").casefold()
+    query = str(query or "").strip()
+    value = query.casefold()
     if any(term in value for term in ("社媒", "朋友圈", "发帖", "小红书", "instagram")):
-        return "奢侈品牌发布会现场照片，人物清晰，主体突出，品牌露出，适合社交媒体发布"
+        return f"{query}。图片要求：人物清晰，主体突出，品牌露出，适合社交媒体发布"
     if "合影" in value:
-        return "活动现场嘉宾合影，多人面对镜头，人物清晰"
+        return f"{query}。图片要求：多人面对镜头，人物清晰"
     if any(term in value for term in ("产品", "手机", "特写")):
-        return "奢侈手机产品特写，产品主体清晰，细节突出"
+        return f"{query}。图片要求：产品主体清晰，细节突出"
     if any(term in value for term in ("舞台", "全景", "现场")):
-        return "品牌发布会舞台全景，现场氛围清晰"
+        return f"{query}。图片要求：现场氛围清晰"
     return query
 
 
@@ -95,9 +96,17 @@ async def search_images(
     conditions = [
         "a.status = 'searchable'",
         "v.is_current",
-        "ie.semantic_embedding IS NOT NULL",
+        "ie.embedding IS NOT NULL",
         authorized,
+        "ie.embedding_provider = %s",
+        "ie.embedding_model = %s",
+        "ie.embedding_dimension = %s",
     ]
+    params.extend([
+        settings.image_embedding_provider,
+        settings.image_embedding_model,
+        settings.image_embedding_dim,
+    ])
     if dealer_id is not None:
         conditions.append("(a.scope_type <> 'dealer' OR a.dealer_id = %s)")
         params.append(dealer_id)
@@ -105,8 +114,8 @@ async def search_images(
         conditions.append("a.category = %s")
         params.append(category)
 
-    vector = await asyncio.to_thread(get_chinese_clip().embed_texts, [visual_query(query)])
-    literal = vector_literal(vector[0])
+    vector = await get_image_embedder().embed_text(visual_query(query))
+    literal = vector_literal(vector)
     rows = await db.fetch_all(
         f"""
         SELECT
@@ -122,8 +131,8 @@ async def search_images(
             s.original_name,
             ie.quality_score,
             ie.semantic_labels,
-            1 - (ie.semantic_embedding <=> %s::vector) AS semantic_similarity,
-            0.97 * (1 - (ie.semantic_embedding <=> %s::vector))
+            1 - (ie.embedding <=> %s::vector) AS semantic_similarity,
+            0.97 * (1 - (ie.embedding <=> %s::vector))
                 + 0.03 * COALESCE(ie.quality_score, 0) AS score
         FROM image_embedding ie
         JOIN asset_version v ON v.id = ie.asset_version_id

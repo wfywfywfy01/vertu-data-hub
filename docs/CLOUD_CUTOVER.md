@@ -32,6 +32,9 @@ IMAGE_EMBEDDING_BASE_URL=<image_embedding_api_base_url>
 IMAGE_EMBEDDING_API_KEY=<image_embedding_api_key>
 IMAGE_EMBEDDING_MODEL=multimodal-embedding-v1
 IMAGE_EMBEDDING_DIM=1024
+IMAGE_EMBEDDING_TIMEOUT_SECONDS=20
+ALLOW_EXTERNAL_IMAGE_PROCESSING=true
+SEMANTIC_IMAGE_QUERY_ENABLED=true
 ```
 
 Use `hash` providers only for local or acceptance testing. They are not

@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from app.retrieval import image_search
 from app.retrieval import search as search_router
+from app.embeddings.image import ImageEmbeddingUnavailableError
 
 
 def test_image_intent_recognizes_human_queries():
@@ -10,7 +11,7 @@ def test_image_intent_recognizes_human_queries():
     assert image_search.is_image_query("活动资料", "media")
     assert not image_search.is_image_query("上周库存是多少")
     assert image_search.visual_query("我想发个社媒，配个文字") == (
-        "奢侈品牌发布会现场照片，人物清晰，主体突出，品牌露出，适合社交媒体发布"
+        "我想发个社媒，配个文字。图片要求：人物清晰，主体突出，品牌露出，适合社交媒体发布"
     )
 
 
@@ -21,9 +22,9 @@ async def test_image_search_is_scoped_cited_and_audited(monkeypatch):
     captured = {}
 
     class Embedder:
-        def embed_texts(self, texts):
-            assert texts == ["发布会照片"]
-            return [[1.0] + [0.0] * 511]
+        async def embed_text(self, text):
+            assert text == "发布会照片"
+            return [1.0] + [0.0] * 1023
 
     async def fetch_all(query, params):
         captured["query"] = query
@@ -49,7 +50,10 @@ async def test_image_search_is_scoped_cited_and_audited(monkeypatch):
         captured["audit_query"] = query
         captured["audit_params"] = params
 
-    monkeypatch.setattr(image_search, "get_chinese_clip", lambda: Embedder())
+    monkeypatch.setattr(image_search, "get_image_embedder", lambda: Embedder())
+    monkeypatch.setattr(image_search.settings, "image_embedding_provider", "api")
+    monkeypatch.setattr(image_search.settings, "image_embedding_model", "multimodal-embedding-v1")
+    monkeypatch.setattr(image_search.settings, "image_embedding_dim", 1024)
     monkeypatch.setattr(image_search.db, "fetch_all", fetch_all)
     monkeypatch.setattr(image_search.db, "execute", execute)
 
@@ -63,6 +67,8 @@ async def test_image_search_is_scoped_cited_and_audited(monkeypatch):
 
     assert "a.dealer_id = ANY(%s)" in captured["query"]
     assert "a.dealer_id = %s" in captured["query"]
+    assert "ie.embedding_provider = %s" in captured["query"]
+    assert "ie.embedding <=> %s::vector" in captured["query"]
     assert rows[0]["retrieval_kind"] == "image_semantic"
     assert rows[0]["citation"]["original_name"] == "image14.png"
     assert "先锋设计" in rows[0]["suggested_caption"]
@@ -73,6 +79,8 @@ async def test_image_search_is_scoped_cited_and_audited(monkeypatch):
 
 async def test_image_router_falls_back_when_semantic_index_is_empty(monkeypatch):
     calls = []
+    monkeypatch.setattr(search_router.settings, "semantic_image_query_enabled", True)
+    monkeypatch.setattr(search_router.settings, "image_embedding_provider", "api")
 
     async def images(query, **kwargs):
         calls.append("images")
@@ -114,3 +122,47 @@ async def test_image_router_skips_local_model_when_disabled(monkeypatch):
 
     assert len(rows) == 1
     assert calls == ["knowledge"]
+
+
+async def test_image_router_skips_hash_cross_modal_search(monkeypatch):
+    calls = []
+
+    async def images(query, **kwargs):
+        calls.append("images")
+        return []
+
+    async def knowledge(query, **kwargs):
+        calls.append("knowledge")
+        return [{"asset_id": uuid4()}]
+
+    monkeypatch.setattr(search_router.settings, "semantic_image_query_enabled", True)
+    monkeypatch.setattr(search_router.settings, "image_embedding_provider", "hash")
+    monkeypatch.setattr(search_router, "search_images", images)
+    monkeypatch.setattr(search_router, "search_knowledge", knowledge)
+    await search_router.search_assets("找发布会照片", dealer_ids=[], actor_id="pytest")
+
+    assert calls == ["knowledge"]
+
+
+async def test_image_router_falls_back_when_multimodal_api_is_unavailable(monkeypatch):
+    calls = []
+
+    async def images(query, **kwargs):
+        calls.append("images")
+        raise ImageEmbeddingUnavailableError("offline")
+
+    async def knowledge(query, **kwargs):
+        calls.append("knowledge")
+        return [{"asset_id": uuid4()}]
+
+    monkeypatch.setattr(search_router.settings, "semantic_image_query_enabled", True)
+    monkeypatch.setattr(search_router.settings, "image_embedding_provider", "api")
+    monkeypatch.setattr(search_router, "search_images", images)
+    monkeypatch.setattr(search_router, "search_knowledge", knowledge)
+
+    rows = await search_router.search_assets(
+        "找发布会照片", dealer_ids=[], actor_id="pytest"
+    )
+
+    assert len(rows) == 1
+    assert calls == ["images", "knowledge"]

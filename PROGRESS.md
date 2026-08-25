@@ -1,10 +1,18 @@
 # Progress
 
-## 2026-08-25：低内存图片检索门禁
+## 2026-08-25：4 GiB 云端多模态图片检索
 
-- 1.64 GiB 共享主机加载本地中文图文模型时出现整机内存换页阻塞。
-- 新增 `SEMANTIC_IMAGE_QUERY_ENABLED`；小规格生产主机关闭后保留 OCR/文字检索、图片水印预览和管理员原件导出。
-- 本地图文语义检索需迁到至少 4 GiB 的独立 Worker/API 后再开启。
+- 移除在线 Chinese CLIP、PyTorch/Transformers 显式依赖和模型预热。
+- 图片入库与文字搜图统一使用百炼 1024 维多模态向量；API 故障自动回退 OCR/文字检索。
+- `internal/confidential` 仅在管理员显式授权后外发，`restricted` 永不外发。
+- 存量图片支持按经销商或 `--all` 幂等回填。
+
+### 验证
+
+- `python -m pytest -q`：114 passed。
+- 编译、依赖、两次幂等建库和两套 Docker Compose 配置检查通过。
+- 本机容器构建受 Docker Hub 失效登录和错误缓存基础镜像阻塞，需由 GitHub CI 完成镜像构建。
+- 云端回填与真实图片相关度验收等待 DashScope API Key，不标记为生产完成。
 
 ## 2026-08-25：生产云网络韧性
 

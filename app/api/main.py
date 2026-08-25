@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import uuid
 from contextlib import asynccontextmanager
 
@@ -12,18 +11,12 @@ from app.api.errors import ApiError, api_error_handler
 from app.api.routes import router
 from app import db
 from app.config import settings, validate_production_settings
-from app.embeddings.chinese_clip import get_chinese_clip
 from app.metrics import begin_request, end_request, render as render_metrics
-from app.model_contract import require_api_models
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     validate_production_settings()
-    if settings.app_env == "production":
-        await asyncio.to_thread(require_api_models)
-    if settings.semantic_image_preload:
-        await asyncio.to_thread(get_chinese_clip().embed_texts, ["图片检索预热"])
     try:
         yield
     finally:

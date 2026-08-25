@@ -40,19 +40,6 @@ def test_required_models_are_checked_offline(monkeypatch):
     assert checked == ["ocr", "image", "video"]
 
 
-def test_api_only_checks_its_image_model(monkeypatch):
-    checked = []
-    monkeypatch.setattr(model_contract, "MODEL_CHECKS", (
-        ("ocr", lambda: checked.append("ocr")),
-        ("image", lambda: checked.append("image")),
-        ("video", lambda: checked.append("video")),
-    ))
-
-    model_contract.require_api_models()
-
-    assert checked == ["image"]
-
-
 def test_missing_required_model_fails_startup(monkeypatch):
     def missing():
         raise FileNotFoundError("model cache empty")

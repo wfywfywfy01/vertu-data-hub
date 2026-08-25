@@ -26,10 +26,14 @@ EMBEDDING_PROVIDER=api
 EMBEDDING_BASE_URL=<openai_compatible_url>
 EMBEDDING_API_KEY=<key>
 EMBEDDING_MODEL=text-embedding-v3
-IMAGE_EMBEDDING_PROVIDER=hash
-ALLOW_EXTERNAL_IMAGE_PROCESSING=false
-SEMANTIC_IMAGE_BATCH_SIZE=4
-SEMANTIC_IMAGE_PRELOAD=true
+IMAGE_EMBEDDING_PROVIDER=api
+IMAGE_EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/api/v1
+IMAGE_EMBEDDING_API_KEY=<dashscope_key>
+IMAGE_EMBEDDING_MODEL=multimodal-embedding-v1
+IMAGE_EMBEDDING_DIM=1024
+IMAGE_EMBEDDING_TIMEOUT_SECONDS=20
+ALLOW_EXTERNAL_IMAGE_PROCESSING=true
+SEMANTIC_IMAGE_QUERY_ENABLED=true
 ```
 
 ## 2. Upload Pilot Files
@@ -54,7 +58,6 @@ python -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
 python scripts/init_db.py
-python -m app.cli.preload_semantic_images
 python -m app.cli.preload_media
 python -m app.cli.register_source
 python -m app.cli.sync_oss --all
@@ -75,12 +78,21 @@ SELECT status, items_processed, error, finished_at
 FROM ingestion_run ORDER BY id DESC LIMIT 20;
 SELECT count(*) FROM doc_chunk;
 SELECT count(*) FROM media_asset;
-SELECT count(*) FROM image_embedding WHERE semantic_embedding IS NOT NULL;
+SELECT embedding_provider, embedding_model, count(*)
+FROM image_embedding GROUP BY embedding_provider, embedding_model;
 SELECT count(*) FROM structured_record;
 ```
 
 Run `python -m app.cli.sync_oss --all` again. The second run must report zero
 processed items for unchanged files.
+
+After changing the image model, backfill current `internal/confidential` images:
+
+```bash
+python -m app.cli.index_semantic_images --all
+```
+
+`restricted` images are intentionally excluded from cloud processing.
 
 ## 5. Rollback
 

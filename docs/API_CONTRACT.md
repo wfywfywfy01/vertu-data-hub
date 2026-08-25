@@ -62,16 +62,17 @@
 资产 ID、版本 ID/编号和页码。审计只保存查询 SHA-256、命中数和资产 ID，不保存
 原始查询。
 
-图片分类或查询包含图片、照片、合影、社媒等视觉意图时，同一接口改用本地
-Chinese-CLIP 图文向量检索。授权范围、当前版本、`searchable` 状态和经销商过滤
+图片分类或查询包含图片、照片、合影、社媒等视觉意图时，同一接口改用阿里百炼
+统一图文向量检索。授权范围、当前版本、`searchable` 状态、模型版本和经销商过滤
 与文字检索一致。图片结果增加 `retrieval_kind=image_semantic`、
 `semantic_similarity`、`quality_score`、`semantic_labels` 和
-`suggested_caption`；配文只作为发布前人工确认的草稿。模型在私有 worker 内运行，
-原图不发送给 OpenRouter 或外部图片 API。没有图片语义索引时自动回退文字检索。
+`suggested_caption`；配文只作为发布前人工确认的草稿。只有显式授权的
+`internal/confidential` 图片会发送百炼 embedding API，`restricted` 图片永不外发。
+接口不可用或没有匹配向量时自动回退文字检索。
 
 音视频转写和视频关键帧描述进入同一个 `content_chunk` 检索面；引用增加
 `timestamp_start` 与 `timestamp_end`。转写使用私有 worker 内的 faster-whisper，
-关键帧使用本地 Chinese-CLIP 标注，原始音视频不外发。
+关键帧在本地抽取并 OCR，原始音视频不外发。
 
 ### 有引用回答
 
