@@ -1,5 +1,17 @@
 # Progress
 
+## 2026-08-25：生产云网络韧性
+
+- OpenRouter/OpenAI 在目标 VPS 的 TLS 握手超时；DeepSeek 与阿里百炼连接正常。
+- 文本 Embedding 采用 10 秒短超时，服务不可用时自动降级为经销商权限范围内的 PostgreSQL 词法检索。
+- 有引用回答增加固定 DeepSeek 官方端点，保留脱敏、敏感资料阻断、结构校验、引用校验和审计。
+
+### 验证
+
+- `python -m pytest -q`：106 passed。
+- `python -m compileall -q app scripts tests`、`python -m pip check` 和两套 Docker Compose 配置检查通过。
+- 目标 VPS：DeepSeek 鉴权 200；OpenRouter 和 OpenAI TLS 超时已复现。
+
 ## 2026-08-22：里程碑 4G 受控内容与音视频
 
 - 普通读取只返回移除元数据、缩小并带水印的图片，或再次脱敏的文字预览。
