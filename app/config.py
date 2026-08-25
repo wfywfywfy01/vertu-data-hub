@@ -151,16 +151,21 @@ def validate_production_settings(value: Settings = settings) -> None:
     ):
         errors.append("production text embedding API is required")
     if (
-        value.image_embedding_provider != "api"
+        value.image_embedding_provider not in {"api", "qwen"}
         or not value.image_embedding_base_url
         or not value.image_embedding_api_key
         or not getattr(value, "image_embedding_model", "")
     ):
-        errors.append("production multimodal image embedding API is required")
+        errors.append("production image understanding API is required")
     if urlsplit(getattr(value, "image_embedding_base_url", "")).scheme != "https":
         errors.append("IMAGE_EMBEDDING_BASE_URL must use HTTPS")
     if getattr(value, "image_embedding_dim", 0) != 1024:
         errors.append("IMAGE_EMBEDDING_DIM must be 1024")
+    if (
+        value.image_embedding_provider == "qwen"
+        and getattr(value, "embedding_dim", 0) != getattr(value, "image_embedding_dim", 0)
+    ):
+        errors.append("Qwen image and text embedding dimensions must match")
     if not getattr(value, "allow_external_image_processing", False):
         errors.append("ALLOW_EXTERNAL_IMAGE_PROCESSING=true is required in production")
     if getattr(value, "allow_external_text_generation", False):

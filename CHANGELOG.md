@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added private Qwen vision analysis for image descriptions and labels, reusing text Embedding for low-memory semantic image retrieval with fail-safe fallback.
 - Replaced local Chinese-CLIP/PyTorch image retrieval with DashScope multimodal embeddings, strict sensitivity routing, API fallback, and idempotent backfill.
 - Added fast lexical retrieval fallback when the embedding API is unavailable and a fixed-endpoint DeepSeek answer provider for restricted cloud networks.
 - Added low-cardinality Prometheus HTTP metrics and verified atomic PostgreSQL backups with retention.
@@ -29,6 +30,6 @@
 
 ### Verification
 
-- `python -m pytest -q`: 114 passed.
+- `python -m pytest -q`: 122 passed.
 - Compilation, dependency, repeatable schema, development Compose, and production Compose checks passed.
-- Cloud image backfill and retrieval acceptance remain pending a DashScope API key.
+- Real Qwen image acceptance remains pending recovery of the configured model upstream, which currently returns HTTP 502 after successful gateway authentication.

@@ -110,7 +110,16 @@ def test_production_requires_cloud_multimodal_embedding(tmp_path):
     )
 
     validate_production_settings(values)
+    values.image_embedding_provider = "qwen"
+    values.image_embedding_base_url = "https://qwen.internal/v1"
+    values.image_embedding_model = "qwen-vision.gguf"
+    values.embedding_dim = 1024
+    validate_production_settings(values)
+    values.embedding_dim = 768
+    with pytest.raises(RuntimeError, match="dimensions must match"):
+        validate_production_settings(values)
+    values.embedding_dim = 1024
     values.image_embedding_provider = "hash"
 
-    with pytest.raises(RuntimeError, match="multimodal image embedding API"):
+    with pytest.raises(RuntimeError, match="image understanding API"):
         validate_production_settings(values)

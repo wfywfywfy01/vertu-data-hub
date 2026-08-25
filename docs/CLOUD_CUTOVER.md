@@ -27,18 +27,20 @@ EMBEDDING_BASE_URL=<embedding_api_base_url>
 EMBEDDING_API_KEY=<embedding_api_key>
 EMBEDDING_MODEL=text-embedding-v3
 EMBEDDING_DIM=1024
-IMAGE_EMBEDDING_PROVIDER=api
-IMAGE_EMBEDDING_BASE_URL=<image_embedding_api_base_url>
-IMAGE_EMBEDDING_API_KEY=<image_embedding_api_key>
-IMAGE_EMBEDDING_MODEL=multimodal-embedding-v1
+IMAGE_EMBEDDING_PROVIDER=qwen
+IMAGE_EMBEDDING_BASE_URL=https://<private_qwen_host>
+IMAGE_EMBEDDING_API_KEY=<qwen_key>
+IMAGE_EMBEDDING_MODEL=<qwen_vision_model_id>
 IMAGE_EMBEDDING_DIM=1024
-IMAGE_EMBEDDING_TIMEOUT_SECONDS=20
+IMAGE_EMBEDDING_TIMEOUT_SECONDS=60
 ALLOW_EXTERNAL_IMAGE_PROCESSING=true
 SEMANTIC_IMAGE_QUERY_ENABLED=true
 ```
 
-Use `hash` providers only for local or acceptance testing. They are not
-production semantic embeddings.
+`qwen` uses the OpenAI-compatible vision chat endpoint to describe images and
+the configured text Embedding service to index those descriptions. `api` remains
+available for a native unified image/text Embedding API. Use `hash` only for
+local or acceptance testing.
 
 ## Initialize
 

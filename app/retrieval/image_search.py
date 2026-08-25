@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from uuid import UUID
 
 from psycopg.types.json import Jsonb
 
 from app import db
 from app.config import settings
-from app.embeddings.image import get_image_embedder
+from app.embeddings.image import get_image_embedder, image_model_identity
 from app.embeddings.text import vector_literal
 from app.knowledge.scopes import authorized_scope_sql
 from app.processing.redaction import redact_text
@@ -18,6 +19,7 @@ IMAGE_INTENT_TERMS = (
     "图片", "照片", "相片", "配图", "合影", "海报", "截图", "视觉",
     "社媒", "朋友圈", "发帖", "小红书", "instagram", "photo", "image",
 )
+METADATA_TERM_RE = re.compile(r"[A-Za-z0-9_.-]{2,}|[\u3400-\u4dbf\u4e00-\u9fff]{2,}")
 
 
 def is_image_query(query: str, category: str | None = None) -> bool:
@@ -104,7 +106,7 @@ async def search_images(
     ]
     params.extend([
         settings.image_embedding_provider,
-        settings.image_embedding_model,
+        image_model_identity(),
         settings.image_embedding_dim,
     ])
     if dealer_id is not None:
@@ -114,7 +116,8 @@ async def search_images(
         conditions.append("a.category = %s")
         params.append(category)
 
-    vector = await get_image_embedder().embed_text(visual_query(query))
+    safe_query = redact_text(query).text
+    vector = await get_image_embedder().embed_text(visual_query(safe_query))
     literal = vector_literal(vector)
     rows = await db.fetch_all(
         f"""
@@ -177,6 +180,90 @@ async def search_images(
             "semantic_labels": labels,
             "suggested_caption": _caption(labels),
             "retrieval_kind": "image_semantic",
+            "citation": citation,
+        })
+    await _audit(actor_id=actor_id, query=query, rows=results, request_id=request_id)
+    return results
+
+
+async def search_image_metadata(
+    query: str,
+    *,
+    dealer_ids: list[UUID] | None,
+    actor_id: str,
+    team_keys: list[str] | None = None,
+    request_id: str | None = None,
+    dealer_id: UUID | None = None,
+    category: str | None = None,
+    top_k: int = 8,
+) -> list[dict]:
+    terms = list(dict.fromkeys(
+        term.casefold() for term in METADATA_TERM_RE.findall(redact_text(query).text)
+    ))[:16]
+    if not terms:
+        return []
+    patterns = [f"%{term}%" for term in terms]
+    authorized, params = authorized_scope_sql("a", dealer_ids, team_keys)
+    conditions = ["a.status = 'searchable'", "v.is_current", authorized]
+    if dealer_id is not None:
+        conditions.append("(a.scope_type <> 'dealer' OR a.dealer_id = %s)")
+        params.append(dealer_id)
+    if category is not None:
+        conditions.append("a.category = %s")
+        params.append(category)
+    rows = await db.fetch_all(
+        f"""
+        SELECT
+            a.id AS asset_id, a.dealer_id, a.scope_type, a.scope_key,
+            a.title, a.category, a.sensitivity,
+            v.id AS asset_version_id, v.version_number,
+            s.original_name, ie.quality_score, ie.semantic_labels
+        FROM image_embedding ie
+        JOIN asset_version v ON v.id = ie.asset_version_id
+        JOIN knowledge_asset a ON a.id = v.asset_id
+        JOIN source_object s ON s.id = v.source_object_id
+        WHERE {' AND '.join(conditions)}
+          AND (
+            lower(a.title) LIKE ANY(%s)
+            OR lower(s.original_name) LIKE ANY(%s)
+            OR lower(ie.semantic_labels::text) LIKE ANY(%s)
+          )
+        ORDER BY COALESCE(ie.quality_score, 0) DESC, a.id
+        LIMIT %s
+        """,
+        [*params, patterns, patterns, patterns, top_k],
+    )
+    results = []
+    for row in rows:
+        labels = list(row.get("semantic_labels") or [])
+        citation = {
+            "asset_id": str(row["asset_id"]),
+            "asset_version_id": str(row["asset_version_id"]),
+            "version_number": row["version_number"],
+            "scope_type": row["scope_type"],
+            "scope_key": row["scope_key"],
+            "title": redact_text(row["title"]).text,
+            "original_name": redact_text(row["original_name"]).text,
+            "page_start": None,
+            "page_end": None,
+        }
+        results.append({
+            "chunk_id": None,
+            "dealer_id": row["dealer_id"],
+            "scope_type": row["scope_type"],
+            "scope_key": row["scope_key"],
+            "asset_id": row["asset_id"],
+            "text": "按图片标题、文件名或已确认画面标签匹配。",
+            "section": None,
+            "category": row["category"],
+            "sensitivity": row["sensitivity"],
+            "score": 0.01 + 0.01 * float(row["quality_score"] or 0),
+            "semantic_similarity": None,
+            "lexical_score": 1.0,
+            "quality_score": float(row["quality_score"] or 0),
+            "semantic_labels": labels,
+            "suggested_caption": _caption(labels),
+            "retrieval_kind": "image_metadata",
             "citation": citation,
         })
     await _audit(actor_id=actor_id, query=query, rows=results, request_id=request_id)
