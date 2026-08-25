@@ -20,6 +20,10 @@ class TextEmbedder(Protocol):
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
 
 
+class EmbeddingUnavailableError(RuntimeError):
+    pass
+
+
 class ApiTextEmbedder:
     """OpenAI 兼容 embeddings API。"""
 
@@ -33,17 +37,27 @@ class ApiTextEmbedder:
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         vectors: list[list[float]] = []
-        async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
-            for i in range(0, len(texts), self.BATCH):
-                batch = texts[i : i + self.BATCH]
-                resp = await client.post(
-                    f"{self.base_url}/embeddings",
-                    headers={"Authorization": f"Bearer {settings.embedding_api_key}"},
-                    json={"model": self.model, "input": batch},
-                )
-                resp.raise_for_status()
-                data = sorted(resp.json()["data"], key=lambda d: d["index"])
-                vectors.extend(d["embedding"] for d in data)
+        try:
+            async with httpx.AsyncClient(
+                timeout=settings.embedding_timeout_seconds, trust_env=False
+            ) as client:
+                for i in range(0, len(texts), self.BATCH):
+                    batch = texts[i : i + self.BATCH]
+                    resp = await client.post(
+                        f"{self.base_url}/embeddings",
+                        headers={"Authorization": f"Bearer {settings.embedding_api_key}"},
+                        json={"model": self.model, "input": batch},
+                    )
+                    resp.raise_for_status()
+                    data = sorted(resp.json()["data"], key=lambda d: d["index"])
+                    vectors.extend(d["embedding"] for d in data)
+        except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+            raise EmbeddingUnavailableError("text embedding service is unavailable") from exc
+        if len(vectors) != len(texts) or any(
+            not isinstance(vector, list) or len(vector) != settings.embedding_dim
+            for vector in vectors
+        ):
+            raise EmbeddingUnavailableError("text embedding service returned invalid vectors")
         return vectors
 
 

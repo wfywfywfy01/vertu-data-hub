@@ -22,6 +22,15 @@ def _configure(monkeypatch):
     monkeypatch.setattr(openrouter.settings, "openrouter_app_title", "Dealer Knowledge")
 
 
+def _configure_deepseek(monkeypatch):
+    from app.answers import openrouter
+
+    monkeypatch.setattr(openrouter.settings, "allow_external_text_generation", True)
+    monkeypatch.setattr(openrouter.settings, "answer_provider", "deepseek")
+    monkeypatch.setattr(openrouter.settings, "deepseek_api_key", "deepseek-test-key")
+    monkeypatch.setattr(openrouter.settings, "deepseek_model", "deepseek-chat")
+
+
 async def test_openrouter_requests_strict_structured_grounded_answer(monkeypatch):
     _configure(monkeypatch)
     captured = {}
@@ -95,6 +104,48 @@ def test_openrouter_rejects_non_official_endpoint(monkeypatch):
 
     with pytest.raises(RuntimeError, match="OPENROUTER_BASE_URL"):
         OpenRouterClient()
+
+
+async def test_deepseek_uses_fixed_endpoint_and_json_output(monkeypatch):
+    _configure_deepseek(monkeypatch)
+    captured = {}
+
+    async def handler(request):
+        captured["request"] = request
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "model": "deepseek-chat",
+                "choices": [{
+                    "message": {
+                        "content": json.dumps(
+                            {"answer": "库存为 12 台。", "cited_indices": [1]},
+                            ensure_ascii=False,
+                        )
+                    }
+                }],
+            },
+        )
+
+    client = OpenRouterClient(transport=httpx.MockTransport(handler))
+    result = await client.generate(
+        "库存？",
+        [{
+            "text": "库存为 12 台。",
+            "citation": {
+                "title": "库存",
+                "original_name": "inventory.pdf",
+                "page_start": 1,
+            },
+        }],
+    )
+
+    assert captured["request"].url == "https://api.deepseek.com/v1/chat/completions"
+    assert captured["request"].headers["authorization"] == "Bearer deepseek-test-key"
+    assert captured["body"]["response_format"] == {"type": "json_object"}
+    assert "provider" not in captured["body"]
+    assert result.model == "deepseek-chat"
 
 
 async def test_openrouter_rejects_coerced_citation_index(monkeypatch):

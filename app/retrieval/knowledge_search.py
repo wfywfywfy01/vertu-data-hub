@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from uuid import UUID
 
 from psycopg.types.json import Jsonb
 
 from app import db
-from app.embeddings.text import get_text_embedder, vector_literal
+from app.embeddings.text import EmbeddingUnavailableError, get_text_embedder, vector_literal
 from app.knowledge.scopes import authorized_scope_sql
 from app.processing.redaction import redact_text
 
@@ -16,6 +17,7 @@ from app.processing.redaction import redact_text
 RRF_K = 60
 MAX_CANDIDATES = 100
 MAX_FALLBACK_TERMS = 32
+logger = logging.getLogger(__name__)
 
 
 ASCII_TERM_RE = re.compile(r"[A-Za-z0-9]{2,}")
@@ -187,19 +189,24 @@ async def search_knowledge(
     where, scope_params = _scope(dealer_ids, team_keys, dealer_id, category)
     candidates = min(MAX_CANDIDATES, max(20, top_k * 10))
     safe_query = redact_text(query).text
-    vector = (await get_text_embedder().embed([safe_query]))[0]
-    literal = vector_literal(vector)
-    vector_hits = await db.fetch_all(
-        f"""
-        {BASE_SELECT},
-            1 - (c.embedding <=> %s::vector) AS semantic_similarity
-        {BASE_FROM}
-        WHERE {where}
-        ORDER BY c.embedding <=> %s::vector
-        LIMIT %s
-        """,
-        [literal, *scope_params, literal, candidates],
-    )
+    try:
+        vector = (await get_text_embedder().embed([safe_query]))[0]
+    except EmbeddingUnavailableError:
+        logger.warning("text embedding unavailable; using lexical retrieval")
+        vector_hits = []
+    else:
+        literal = vector_literal(vector)
+        vector_hits = await db.fetch_all(
+            f"""
+            {BASE_SELECT},
+                1 - (c.embedding <=> %s::vector) AS semantic_similarity
+            {BASE_FROM}
+            WHERE {where}
+            ORDER BY c.embedding <=> %s::vector
+            LIMIT %s
+            """,
+            [literal, *scope_params, literal, candidates],
+        )
     text_hits = await db.fetch_all(
         f"""
         {BASE_SELECT},

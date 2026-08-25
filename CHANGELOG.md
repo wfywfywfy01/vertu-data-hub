@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added fast lexical retrieval fallback when the embedding API is unavailable and a fixed-endpoint DeepSeek answer provider for restricted cloud networks.
 - Added low-cardinality Prometheus HTTP metrics and verified atomic PostgreSQL backups with retention.
 - Added scoped metadata-free image and redacted text previews plus reason-confirmed, admin-only original exports with append-only audits.
 - Added local audio transcription, video keyframes, time-coded citations, media-derived artifacts, Celery/local ingestion routing, and model preloading.
@@ -28,6 +29,6 @@
 
 ### Verification
 
-- `python -m pytest -q`: 95 passed.
+- `python -m pytest -q`: 106 passed.
 - VMG: 52/52 images indexed; social-media query top four are `image12.png`, `image14.png`, `image09.png`, and `image08.png`.
 - Playwright desktop and 390px mobile: no horizontal overflow, 8/8 images loaded, zero console errors.

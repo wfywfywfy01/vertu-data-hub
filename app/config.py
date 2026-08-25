@@ -25,6 +25,7 @@ class Settings:
     embedding_api_key: str = _env("EMBEDDING_API_KEY")
     embedding_model: str = _env("EMBEDDING_MODEL", "text-embedding-v3")
     embedding_dim: int = int(_env("EMBEDDING_DIM", "1024"))
+    embedding_timeout_seconds: float = float(_env("EMBEDDING_TIMEOUT_SECONDS", "10"))
 
     # 图片 embedding
     image_embedding_provider: str = _env("IMAGE_EMBEDDING_PROVIDER", "hash")
@@ -61,6 +62,8 @@ class Settings:
     openrouter_model: str = _env("OPENROUTER_MODEL", "openai/gpt-4.1-mini")
     openrouter_http_referer: str = _env("OPENROUTER_HTTP_REFERER")
     openrouter_app_title: str = _env("OPENROUTER_APP_TITLE", "Vertu Dealer Knowledge")
+    deepseek_api_key: str = _env("DEEPSEEK_API_KEY")
+    deepseek_model: str = _env("DEEPSEEK_MODEL", "deepseek-chat")
     answer_min_semantic_similarity: float = float(
         _env("ANSWER_MIN_SEMANTIC_SIMILARITY", "0.35")
     )
@@ -102,6 +105,8 @@ def validate_production_settings(value: Settings = settings) -> None:
         raise RuntimeError("OSS_SIGNED_URL_SECONDS must be between 60 and 3600")
     if not 1 <= getattr(value, "semantic_image_batch_size", 4) <= 32:
         raise RuntimeError("SEMANTIC_IMAGE_BATCH_SIZE must be between 1 and 32")
+    if not 1 <= getattr(value, "embedding_timeout_seconds", 10) <= 60:
+        raise RuntimeError("EMBEDDING_TIMEOUT_SECONDS must be between 1 and 60")
     if not 5 <= getattr(value, "media_keyframe_interval_seconds", 30) <= 600:
         raise RuntimeError("MEDIA_KEYFRAME_INTERVAL_SECONDS must be between 5 and 600")
     if not 1 <= getattr(value, "media_max_keyframes", 60) <= 300:
@@ -154,11 +159,18 @@ def validate_production_settings(value: Settings = settings) -> None:
     elif value.image_embedding_provider != "hash":
         errors.append("IMAGE_EMBEDDING_PROVIDER must be hash when external image processing is disabled")
     if getattr(value, "allow_external_text_generation", False):
-        if getattr(value, "answer_provider", "disabled") != "openrouter":
-            errors.append("external text generation requires ANSWER_PROVIDER=openrouter")
-        if not getattr(value, "openrouter_api_key", ""):
-            errors.append("OPENROUTER_API_KEY is required for external text generation")
-        if not getattr(value, "openrouter_model", ""):
-            errors.append("OPENROUTER_MODEL is required for external text generation")
+        provider = getattr(value, "answer_provider", "disabled")
+        if provider not in {"openrouter", "deepseek"}:
+            errors.append("external text generation requires ANSWER_PROVIDER=openrouter or deepseek")
+        elif provider == "openrouter":
+            if not getattr(value, "openrouter_api_key", ""):
+                errors.append("OPENROUTER_API_KEY is required for external text generation")
+            if not getattr(value, "openrouter_model", ""):
+                errors.append("OPENROUTER_MODEL is required for external text generation")
+        elif provider == "deepseek":
+            if not getattr(value, "deepseek_api_key", ""):
+                errors.append("DEEPSEEK_API_KEY is required for external text generation")
+            if not getattr(value, "deepseek_model", ""):
+                errors.append("DEEPSEEK_MODEL is required for external text generation")
     if errors:
         raise RuntimeError("invalid production configuration: " + "; ".join(errors))
