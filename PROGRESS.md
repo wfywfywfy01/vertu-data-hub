@@ -293,3 +293,23 @@ Acceptance evidence:
   `image08.png`; all four visually inspected as clear model/product event images.
 - Playwright desktop and 390x844 mobile: no horizontal overflow, 8/8 previews
   loaded, zero console errors, search and image requests returned HTTP 200.
+
+## 2026-08-25: private Qwen image understanding
+
+- Added `qwen` image provider using the existing OpenAI-compatible private
+  vision endpoint; no PyTorch or vision model is loaded on the 4 GiB data host.
+- Qwen descriptions and labels are redacted, indexed through the configured
+  text Embedding model, and returned through the existing authorized image search.
+- `restricted` images remain local-only; model failures fall back to OCR/hash
+  without blocking ingestion.
+
+Acceptance evidence:
+
+- `python -m pytest -q`: 122 passed.
+- `python -m compileall -q app scripts tests`: passed.
+- Development Compose validation passed.
+- Authenticated Qwen model and vision calls currently return HTTP 502 from the
+  Caddy upstream; real image backfill is blocked until that model process recovers.
+- Local Docker build did not reach project dependencies: the cached
+  `python:3.12-slim-bookworm` image identifies as Debian 13 and its APT index
+  returns 404; refreshing it is blocked by this workstation's Docker Hub login.

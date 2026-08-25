@@ -26,12 +26,12 @@ EMBEDDING_PROVIDER=api
 EMBEDDING_BASE_URL=<openai_compatible_url>
 EMBEDDING_API_KEY=<key>
 EMBEDDING_MODEL=text-embedding-v3
-IMAGE_EMBEDDING_PROVIDER=api
-IMAGE_EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/api/v1
-IMAGE_EMBEDDING_API_KEY=<dashscope_key>
-IMAGE_EMBEDDING_MODEL=multimodal-embedding-v1
+IMAGE_EMBEDDING_PROVIDER=qwen
+IMAGE_EMBEDDING_BASE_URL=https://<private_qwen_host>
+IMAGE_EMBEDDING_API_KEY=<qwen_key>
+IMAGE_EMBEDDING_MODEL=<qwen_vision_model_id>
 IMAGE_EMBEDDING_DIM=1024
-IMAGE_EMBEDDING_TIMEOUT_SECONDS=20
+IMAGE_EMBEDDING_TIMEOUT_SECONDS=60
 ALLOW_EXTERNAL_IMAGE_PROCESSING=true
 SEMANTIC_IMAGE_QUERY_ENABLED=true
 ```
@@ -92,7 +92,7 @@ After changing the image model, backfill current `internal/confidential` images:
 python -m app.cli.index_semantic_images --all
 ```
 
-`restricted` images are intentionally excluded from cloud processing.
+`restricted` images are intentionally excluded from model processing.
 
 ## 5. Rollback
 

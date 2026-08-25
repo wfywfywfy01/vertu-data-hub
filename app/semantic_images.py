@@ -4,9 +4,11 @@ from __future__ import annotations
 import asyncio
 from uuid import UUID
 
+from psycopg.types.json import Jsonb
+
 from app import db
 from app.config import settings
-from app.embeddings.image import get_image_embedder
+from app.embeddings.image import analyze_image, get_image_embedder, image_model_identity
 from app.embeddings.text import vector_literal
 from app.processing.images import image_quality
 from app.storage import LocalStorage, get_storage
@@ -19,8 +21,8 @@ async def index_semantic_images(
     scope_key: str | None = None,
     force: bool = False,
 ) -> int:
-    if settings.image_embedding_provider != "api":
-        raise RuntimeError("IMAGE_EMBEDDING_PROVIDER=api is required")
+    if settings.image_embedding_provider not in {"api", "qwen"}:
+        raise RuntimeError("IMAGE_EMBEDDING_PROVIDER=api or qwen is required")
     if not settings.allow_external_image_processing:
         raise RuntimeError("ALLOW_EXTERNAL_IMAGE_PROCESSING=true is required")
 
@@ -43,12 +45,13 @@ async def index_semantic_images(
         )
         params.extend([
             settings.image_embedding_provider,
-            settings.image_embedding_model,
+            image_model_identity(),
             settings.image_embedding_dim,
         ])
     rows = await db.fetch_all(
         f"""
-        SELECT ie.id, ie.asset_version_id, s.bucket, s.object_key
+        SELECT ie.id, ie.asset_version_id, s.bucket, s.object_key,
+               ie.embedding_provider, ie.embedding_model, ie.embedding_dimension
         FROM image_embedding ie
         JOIN asset_version v ON v.id = ie.asset_version_id
         JOIN knowledge_asset a ON a.id = v.asset_id
@@ -72,9 +75,9 @@ async def index_semantic_images(
             remote_storage = remote_storage or get_storage()
             storage = remote_storage
         data = await asyncio.to_thread(storage.download_bytes, row["object_key"])
-        vector = await embedder.embed_image(data)
+        analysis = await analyze_image(embedder, data)
         quality = await asyncio.to_thread(image_quality, data)
-        await db.execute(
+        updated = await db.execute_returning(
             """
             UPDATE image_embedding SET
                 embedding = %s::vector,
@@ -85,18 +88,36 @@ async def index_semantic_images(
                 semantic_provider = NULL,
                 semantic_model = NULL,
                 quality_score = %s,
-                semantic_labels = '[]'::jsonb,
+                semantic_labels = %s,
                 semantic_indexed_at = NULL
             WHERE id = %s
+              AND embedding_provider = %s
+              AND embedding_model = %s
+              AND embedding_dimension = %s
+            RETURNING id
             """,
             (
-                vector_literal(vector),
+                vector_literal(analysis.vector),
                 settings.image_embedding_provider,
-                settings.image_embedding_model,
+                image_model_identity(),
                 settings.image_embedding_dim,
                 quality,
+                Jsonb(
+                    ([{
+                        "label": analysis.description,
+                        "source": "qwen",
+                        "kind": "description",
+                    }] if analysis.description else [])
+                    + [
+                        {"label": label, "source": "qwen", "kind": "tag"}
+                        for label in analysis.labels
+                    ]
+                ),
                 row["id"],
+                row["embedding_provider"],
+                row["embedding_model"],
+                row["embedding_dimension"],
             ),
         )
-        indexed += 1
+        indexed += int(updated is not None)
     return indexed

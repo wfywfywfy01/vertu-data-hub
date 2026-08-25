@@ -34,11 +34,22 @@ CSV/TXT/Markdown 文档解析、分块、向量化和页码引用。图片与扫
 音频和视频 worker 已支持本地转写、视频关键帧、时间码引用和派生物。
 
 图片 worker 支持 PNG/JPEG/WebP/HEIC 的真实格式校验、本地 OCR、检索前脱敏和
-图片向量；扫描 PDF 在没有数字文本时自动 OCR。生产图片使用阿里百炼
-`multimodal-embedding-v1` 生成 1024 维统一图文向量，不在 4 GiB 主机加载
-Chinese CLIP/PyTorch。默认不向第三方发送原图；显式设置
+图片向量；扫描 PDF 在没有数字文本时自动 OCR。生产图片可用私有 Qwen 图文接口
+生成客观描述和标签，再复用文本 Embedding 生成 1024 维检索向量；也兼容阿里百炼
+统一图文向量。不在 4 GiB 主机加载 Chinese CLIP/PyTorch。Qwen 配置示例：
+
+```dotenv
+IMAGE_EMBEDDING_PROVIDER=qwen
+IMAGE_EMBEDDING_BASE_URL=https://qwen.example.com
+IMAGE_EMBEDDING_API_KEY=<secret>
+IMAGE_EMBEDDING_MODEL=<vision-model-id>
+IMAGE_EMBEDDING_DIM=1024
+IMAGE_EMBEDDING_TIMEOUT_SECONDS=60
+```
+
+默认不向外部模型发送原图；显式设置
 `ALLOW_EXTERNAL_IMAGE_PROCESSING=true` 后，`internal/confidential` 图片才会调用
-云端 embedding，`restricted` 永不外发且只参与 OCR/文件名文字检索。Arabic/Persian 和
+图文接口，`restricted` 永不外发且只参与 OCR/文件名文字检索。Arabic/Persian 和
 Russian OCR 模型应在联网构建环境预热后再部署到离线生产 worker。
 
 新图片在处理时直接生成多模态向量。存量资料切换模型后执行幂等回填：
@@ -49,7 +60,7 @@ python -m app.cli.index_semantic_images --all
 ```
 
 `POST /v1/search` 遇到图片分类或图片意图时自动切换到
-云端多模态检索，返回画面匹配度、质量分、原图引用及待人工确认的社媒配文草稿；
+图片语义检索，返回画面匹配度、质量分、原图引用及待人工确认的社媒配文草稿；
 API 不可用或没有匹配向量时自动回退到 OCR/文件名文字检索。
 
 `POST /v1/search` 已提供经销商权限内的全文 + 向量混合检索。请求体示例：

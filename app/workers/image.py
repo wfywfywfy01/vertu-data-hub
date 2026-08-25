@@ -14,7 +14,10 @@ from app.config import settings
 from app.embeddings.image import (
     HashImageEmbedder,
     ImageEmbeddingUnavailableError,
+    SensitiveImageDescriptionError,
+    analyze_image,
     get_image_embedder,
+    image_model_identity,
 )
 from app.embeddings.text import get_text_embedder, vector_literal
 from app.knowledge import assets
@@ -46,13 +49,17 @@ def _select_image_embedder(context: dict):
         raise PermanentImageError("embedding_dimension_error", "image embedding dimension must be 1024")
     provider = settings.image_embedding_provider
     external_allowed = (
-        provider == "api"
+        provider in {"api", "qwen"}
         and settings.allow_external_image_processing
         and context["sensitivity"] in {"internal", "confidential"}
     )
     if provider == "hash" or external_allowed:
         embedder = get_image_embedder()
-        model = settings.image_embedding_model if provider == "api" else "hash-color-grid-v1"
+        model = (
+            image_model_identity()
+            if provider in {"api", "qwen"}
+            else "hash-color-grid-v1"
+        )
         return embedder, provider, model, settings.image_embedding_dim
     return (
         HashImageEmbedder(settings.image_embedding_dim),
@@ -73,6 +80,7 @@ async def _save_output(
     artifact_size: int | None,
     image_identity: tuple[str, str, int],
     quality_score: float,
+    semantic_labels: list[dict],
 ) -> None:
     image_provider, image_model, image_dimension = image_identity
     text_provider = settings.embedding_provider
@@ -138,7 +146,7 @@ async def _save_output(
                      semantic_embedding, semantic_provider, semantic_model, quality_score,
                      semantic_labels, semantic_indexed_at)
                 VALUES (%s, %s, %s::vector, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        NULL, NULL, NULL, %s, '[]'::jsonb, NULL)
+                        NULL, NULL, NULL, %s, %s, NULL)
                 ON CONFLICT (asset_version_id, pipeline_version) DO UPDATE SET
                     embedding = EXCLUDED.embedding,
                     embedding_provider = EXCLUDED.embedding_provider,
@@ -154,7 +162,7 @@ async def _save_output(
                     semantic_provider = NULL,
                     semantic_model = NULL,
                     quality_score = EXCLUDED.quality_score,
-                    semantic_labels = '[]'::jsonb,
+                    semantic_labels = EXCLUDED.semantic_labels,
                     semantic_indexed_at = NULL,
                     created_at = now()
                 """,
@@ -165,6 +173,7 @@ async def _save_output(
                     extracted.ocr_language, extracted.line_count, extracted.mean_confidence,
                     PIPELINE_VERSION,
                     quality_score,
+                    Jsonb(semantic_labels),
                 ),
             )
             await conn.execute(
@@ -219,12 +228,35 @@ async def process_image_job(job_id, *, storage=None) -> dict:
         extracted = replace(extracted, text=redacted.text)
         image_embedder, image_provider, image_model, image_dimension = _select_image_embedder(context)
         try:
-            image_vector = await image_embedder.embed_image(source)
+            analysis = await analyze_image(image_embedder, source)
+            image_vector = analysis.vector
+        except SensitiveImageDescriptionError as exc:
+            output = {"quarantined": True, "review_reasons": exc.reasons}
+            await assets.transition_job(
+                job_id, "succeeded", progress=100, output_data=output
+            )
+            return {"status": "awaiting_review", "retryable": False, **output}
         except ImageEmbeddingUnavailableError:
             image_embedder = HashImageEmbedder(settings.image_embedding_dim)
             image_provider = "hash"
             image_model = "hash-color-grid-v1"
-            image_vector = await image_embedder.embed_image(source)
+            analysis = await analyze_image(image_embedder, source)
+            image_vector = analysis.vector
+        semantic_labels = []
+        if analysis.description:
+            semantic_labels = [{
+                "label": analysis.description,
+                "source": "qwen",
+                "kind": "description",
+            }]
+            semantic_labels.extend(
+                {"label": label, "source": "qwen", "kind": "tag"}
+                for label in analysis.labels if label
+            )
+            redacted = replace(
+                redacted,
+                count=redacted.count + analysis.redaction_count,
+            )
         quality_score = await asyncio.to_thread(image_quality, source)
         chunks = chunk_markdown(extracted.text)
         text_vectors = await get_text_embedder().embed([chunk.text for chunk in chunks]) if chunks else []
@@ -259,6 +291,7 @@ async def process_image_job(job_id, *, storage=None) -> dict:
             artifact_size=artifact_size,
             image_identity=(image_provider, image_model, image_dimension),
             quality_score=quality_score,
+            semantic_labels=semantic_labels,
         )
         output = {
             "ocr_line_count": extracted.line_count,
