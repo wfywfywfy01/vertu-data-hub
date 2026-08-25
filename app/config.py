@@ -42,6 +42,9 @@ class Settings:
     semantic_image_preload: bool = _env("SEMANTIC_IMAGE_PRELOAD", "true").lower() in {
         "1", "true", "yes"
     }
+    semantic_image_query_enabled: bool = _env(
+        "SEMANTIC_IMAGE_QUERY_ENABLED", "true"
+    ).lower() in {"1", "true", "yes"}
 
     # 本地音视频转写与关键帧。
     media_transcription_model: str = _env("MEDIA_TRANSCRIPTION_MODEL", "small")

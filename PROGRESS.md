@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-08-25：低内存图片检索门禁
+
+- 1.64 GiB 共享主机加载本地中文图文模型时出现整机内存换页阻塞。
+- 新增 `SEMANTIC_IMAGE_QUERY_ENABLED`；小规格生产主机关闭后保留 OCR/文字检索、图片水印预览和管理员原件导出。
+- 本地图文语义检索需迁到至少 4 GiB 的独立 Worker/API 后再开启。
+
 ## 2026-08-25：生产云网络韧性
 
 - OpenRouter/OpenAI 在目标 VPS 的 TLS 握手超时；DeepSeek 与阿里百炼连接正常。
