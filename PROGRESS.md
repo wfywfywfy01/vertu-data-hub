@@ -313,3 +313,23 @@ Acceptance evidence:
 - Local Docker build did not reach project dependencies: the cached
   `python:3.12-slim-bookworm` image identifies as Debian 13 and its APT index
   returns 404; refreshing it is blocked by this workstation's Docker Hub login.
+
+## 2026-08-26: external provider resilience
+
+- Added one bounded retry for network errors, HTTP 429, and 5xx responses from
+  the text Embedding and private Qwen providers. Authentication and invalid
+  responses still fail immediately.
+- Added `python -m app.cli.check_providers` as a deployment gate. It validates
+  the real text vector and Qwen image-to-text-to-vector path without logging
+  credentials or model content.
+- Raised the untracked production text Embedding timeout from 5 to 10 seconds.
+
+Acceptance evidence:
+
+- `python -m pytest -q`: 127 passed.
+- Compilation and development/production Compose validation passed.
+- Production OpenRouter: five consecutive `baai/bge-m3` probes passed at 1024
+  dimensions in 1.19-1.84 seconds.
+- Qwen `/v1/models` and `/v1/chat/completions` returned HTTP 200 from Caddy and
+  llama.cpp. The end-to-end provider probe then passed the generated image,
+  Qwen description, and OpenRouter 1024-dimension vector stages.
