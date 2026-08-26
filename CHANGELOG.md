@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added one bounded retry for transient text/Qwen provider failures and a deployment-blocking end-to-end provider probe with secret-safe output.
 - Added private Qwen vision analysis for image descriptions and labels, reusing text Embedding for low-memory semantic image retrieval with fail-safe fallback.
 - Replaced local Chinese-CLIP/PyTorch image retrieval with DashScope multimodal embeddings, strict sensitivity routing, API fallback, and idempotent backfill.
 - Added fast lexical retrieval fallback when the embedding API is unavailable and a fixed-endpoint DeepSeek answer provider for restricted cloud networks.
@@ -30,6 +31,7 @@
 
 ### Verification
 
-- `python -m pytest -q`: 122 passed.
+- `python -m pytest -q`: 127 passed.
 - Compilation, dependency, repeatable schema, development Compose, and production Compose checks passed.
+- Production OpenRouter returned valid 1024-dimension embeddings in five consecutive probes; the timeout is now 10 seconds.
 - Real Qwen image acceptance remains pending recovery of the configured model upstream, which currently returns HTTP 502 after successful gateway authentication.

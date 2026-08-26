@@ -6,6 +6,7 @@
 
 所有 provider 输出维度 = settings.embedding_dim，与 doc_chunk.embedding 列一致。
 """
+import asyncio
 import hashlib
 import math
 import re
@@ -28,6 +29,8 @@ class ApiTextEmbedder:
     """OpenAI 兼容 embeddings API。"""
 
     BATCH = 10  # DashScope text-embedding-v3 单次上限
+    MAX_ATTEMPTS = 2
+    RETRY_DELAY_SECONDS = 0.25
 
     def __init__(self) -> None:
         if not settings.embedding_api_key:
@@ -43,12 +46,7 @@ class ApiTextEmbedder:
             ) as client:
                 for i in range(0, len(texts), self.BATCH):
                     batch = texts[i : i + self.BATCH]
-                    resp = await client.post(
-                        f"{self.base_url}/embeddings",
-                        headers={"Authorization": f"Bearer {settings.embedding_api_key}"},
-                        json={"model": self.model, "input": batch},
-                    )
-                    resp.raise_for_status()
+                    resp = await self._post(client, batch)
                     data = sorted(resp.json()["data"], key=lambda d: d["index"])
                     vectors.extend(d["embedding"] for d in data)
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
@@ -59,6 +57,22 @@ class ApiTextEmbedder:
         ):
             raise EmbeddingUnavailableError("text embedding service returned invalid vectors")
         return vectors
+
+    async def _post(self, client: httpx.AsyncClient, batch: list[str]) -> httpx.Response:
+        for attempt in range(self.MAX_ATTEMPTS):
+            try:
+                response = await client.post(
+                    f"{self.base_url}/embeddings",
+                    headers={"Authorization": f"Bearer {settings.embedding_api_key}"},
+                    json={"model": self.model, "input": batch},
+                )
+                response.raise_for_status()
+                return response
+            except httpx.HTTPError as exc:
+                if attempt + 1 == self.MAX_ATTEMPTS or not _is_retryable(exc):
+                    raise
+                await asyncio.sleep(self.RETRY_DELAY_SECONDS)
+        raise AssertionError("unreachable")
 
 
 class HashTextEmbedder:
@@ -103,3 +117,11 @@ def get_text_embedder() -> TextEmbedder:
 def vector_literal(vec: list[float]) -> str:
     """转为 pgvector 字面量，SQL 里用 %s::vector 传参。"""
     return "[" + ",".join(f"{x:.7g}" for x in vec) + "]"
+
+
+def _is_retryable(exc: httpx.HTTPError) -> bool:
+    if isinstance(exc, httpx.RequestError):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code == 429 or exc.response.status_code >= 500
+    return False

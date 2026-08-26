@@ -6,6 +6,7 @@
          哈希。两者不在同一语义空间——hash 模式下"以图搜图"对色调/构图相近的图片
          有效，但不具备真实跨模态语义相关性。正式环境须切回 api 并对存量图片重跑。
 """
+import asyncio
 import hashlib
 import io
 import json
@@ -124,6 +125,9 @@ class ApiImageEmbedder:
 class QwenImageEmbedder:
     """Use an OpenAI-compatible Qwen vision endpoint, then embed its description."""
 
+    MAX_ATTEMPTS = 2
+    RETRY_DELAY_SECONDS = 0.25
+
     PROMPT = (
         "分析这张经销商业务图片。只输出 JSON，不要 Markdown："
         '{"description":"用中文客观描述人物、产品、场景、活动、品牌和可见文字",'
@@ -149,23 +153,7 @@ class QwenImageEmbedder:
             async with httpx.AsyncClient(
                 timeout=settings.image_embedding_timeout_seconds, trust_env=False
             ) as client:
-                response = await client.post(
-                    self.chat_url,
-                    headers={"Authorization": f"Bearer {settings.image_embedding_api_key}"},
-                    json={
-                        "model": self.model,
-                        "messages": [{
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": self.PROMPT},
-                                {"type": "image_url", "image_url": {"url": _jpeg_data_url(data)}},
-                            ],
-                        }],
-                        "temperature": 0,
-                        "max_tokens": 500,
-                    },
-                )
-                response.raise_for_status()
+                response = await self._post_description(client, data)
                 content = response.json()["choices"][0]["message"]["content"]
                 if not isinstance(content, str):
                     raise TypeError("vision response content must be text")
@@ -187,6 +175,36 @@ class QwenImageEmbedder:
         if not description:
             raise ImageEmbeddingUnavailableError("Qwen vision service returned no description")
         return description, labels
+
+    async def _post_description(
+        self, client: httpx.AsyncClient, data: bytes
+    ) -> httpx.Response:
+        payload = {
+            "model": self.model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": self.PROMPT},
+                    {"type": "image_url", "image_url": {"url": _jpeg_data_url(data)}},
+                ],
+            }],
+            "temperature": 0,
+            "max_tokens": 500,
+        }
+        for attempt in range(self.MAX_ATTEMPTS):
+            try:
+                response = await client.post(
+                    self.chat_url,
+                    headers={"Authorization": f"Bearer {settings.image_embedding_api_key}"},
+                    json=payload,
+                )
+                response.raise_for_status()
+                return response
+            except httpx.HTTPError as exc:
+                if attempt + 1 == self.MAX_ATTEMPTS or not _is_retryable(exc):
+                    raise
+                await asyncio.sleep(self.RETRY_DELAY_SECONDS)
+        raise AssertionError("unreachable")
 
     async def _embed_text(self, text: str) -> list[float]:
         from app.embeddings.text import EmbeddingUnavailableError, get_text_embedder
@@ -286,3 +304,11 @@ async def analyze_image(embedder: ImageEmbedder, data: bytes) -> ImageAnalysis:
     if analyzer is not None:
         return await analyzer(data)
     return ImageAnalysis(vector=await embedder.embed_image(data))
+
+
+def _is_retryable(exc: httpx.HTTPError) -> bool:
+    if isinstance(exc, httpx.RequestError):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code == 429 or exc.response.status_code >= 500
+    return False

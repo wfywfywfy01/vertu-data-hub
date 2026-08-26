@@ -47,6 +47,16 @@ IMAGE_EMBEDDING_DIM=1024
 IMAGE_EMBEDDING_TIMEOUT_SECONDS=60
 ```
 
+部署前必须用生产配置执行真实外部服务探针；它会验证文本 Embedding 的 1024 维
+向量，并用一张临时空白图完成 Qwen 图像理解到文本向量的整条链路：
+
+```powershell
+python -m app.cli.check_providers
+```
+
+探针失败时不得切换生产。网络错误、HTTP 429 和 5xx 会短重试一次；鉴权错误和
+无效响应不会重试，也不会在输出中显示 URL、模型响应或密钥。
+
 默认不向外部模型发送原图；显式设置
 `ALLOW_EXTERNAL_IMAGE_PROCESSING=true` 后，`internal/confidential` 图片才会调用
 图文接口，`restricted` 永不外发且只参与 OCR/文件名文字检索。Arabic/Persian 和

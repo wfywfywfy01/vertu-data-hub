@@ -29,6 +29,16 @@ Check `/health/ready`, then call one authenticated `/v1/dealers` request. A
 successful upload must have a PostgreSQL `processing_job` row with
 `dispatch_status='sent'`; Redis queue depth alone is never success evidence.
 
+Before a production cutover, run the external provider probe inside the
+candidate container with the production environment:
+
+```powershell
+python -m app.cli.check_providers
+```
+
+Both text and image providers must report `dim=1024`. A failed provider probe
+blocks the cutover even when `/health/ready` passes.
+
 Use a disposable database for schema and ingestion checks. Confirm extension,
 table count, source count, and sample retrieval results before calling a sync
 successful.

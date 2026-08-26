@@ -1,8 +1,9 @@
-from io import BytesIO
 import base64
+from io import BytesIO
 
-from PIL import Image
+import httpx
 import pytest
+from PIL import Image
 
 from app.embeddings.image import (
     ApiImageEmbedder,
@@ -169,6 +170,57 @@ async def test_qwen_image_embedding_rejects_invalid_response(monkeypatch):
 
     with pytest.raises(ImageEmbeddingUnavailableError, match="Qwen vision"):
         await embedder.embed_image(output.getvalue())
+
+
+async def test_qwen_image_embedding_retries_transient_status(monkeypatch):
+    monkeypatch.setattr(
+        "app.embeddings.image.settings.image_embedding_api_key", "test-key"
+    )
+    monkeypatch.setattr(
+        "app.embeddings.image.settings.image_embedding_base_url",
+        "https://qwen.test/v1",
+    )
+    request = httpx.Request("POST", "https://qwen.test/v1/chat/completions")
+    responses = [
+        httpx.Response(502, request=request),
+        httpx.Response(
+            200,
+            request=request,
+            json={
+                "choices": [{
+                    "message": {
+                        "content": '{"description":"VERTU 发布会合影","labels":["发布会"]}'
+                    }
+                }]
+            },
+        ),
+    ]
+    calls = []
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, *_args, **_kwargs):
+            calls.append(1)
+            return responses.pop(0)
+
+    async def no_delay(_seconds):
+        return None
+
+    monkeypatch.setattr("app.embeddings.image.httpx.AsyncClient", lambda **_kwargs: Client())
+    monkeypatch.setattr("app.embeddings.image.asyncio.sleep", no_delay)
+    output = BytesIO()
+    Image.new("RGB", (10, 10), "white").save(output, format="PNG")
+
+    description, labels = await QwenImageEmbedder()._describe(output.getvalue())
+
+    assert description == "VERTU 发布会合影"
+    assert labels == ("发布会",)
+    assert len(calls) == 2
 
 
 async def test_qwen_query_embedding_wraps_text_service_failure(monkeypatch):
