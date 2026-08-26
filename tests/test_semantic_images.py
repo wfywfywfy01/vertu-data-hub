@@ -1,4 +1,30 @@
 from app import semantic_images
+from app.embeddings.image import ImageAnalysis, ImageEmbeddingUnavailableError
+
+
+async def test_qwen_backfill_waits_for_model_recovery(monkeypatch):
+    calls = 0
+    delays = []
+
+    async def analyze(_embedder, _data):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ImageEmbeddingUnavailableError("loading model")
+        return ImageAnalysis(vector=[0.0] * 1024)
+
+    async def sleep(seconds):
+        delays.append(seconds)
+
+    monkeypatch.setattr(semantic_images.settings, "image_embedding_provider", "qwen")
+    monkeypatch.setattr(semantic_images, "analyze_image", analyze)
+    monkeypatch.setattr(semantic_images.asyncio, "sleep", sleep)
+
+    result = await semantic_images._analyze_with_recovery(object(), b"image")
+
+    assert len(result.vector) == 1024
+    assert calls == 2
+    assert delays == [60]
 
 
 async def test_cloud_backfill_updates_primary_vector(monkeypatch):

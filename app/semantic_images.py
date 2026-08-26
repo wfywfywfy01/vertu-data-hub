@@ -8,10 +8,33 @@ from psycopg.types.json import Jsonb
 
 from app import db
 from app.config import settings
-from app.embeddings.image import analyze_image, get_image_embedder, image_model_identity
+from app.embeddings.image import (
+    ImageEmbeddingUnavailableError,
+    analyze_image,
+    get_image_embedder,
+    image_model_identity,
+)
 from app.embeddings.text import vector_literal
 from app.processing.images import image_quality
 from app.storage import LocalStorage, get_storage
+
+
+QWEN_RECOVERY_ATTEMPTS = 5
+QWEN_RECOVERY_DELAY_SECONDS = 60
+
+
+async def _analyze_with_recovery(embedder, data: bytes):
+    for attempt in range(QWEN_RECOVERY_ATTEMPTS):
+        try:
+            return await analyze_image(embedder, data)
+        except ImageEmbeddingUnavailableError:
+            if (
+                settings.image_embedding_provider != "qwen"
+                or attempt + 1 == QWEN_RECOVERY_ATTEMPTS
+            ):
+                raise
+            await asyncio.sleep(QWEN_RECOVERY_DELAY_SECONDS)
+    raise AssertionError("unreachable")
 
 
 async def index_semantic_images(
@@ -75,7 +98,7 @@ async def index_semantic_images(
             remote_storage = remote_storage or get_storage()
             storage = remote_storage
         data = await asyncio.to_thread(storage.download_bytes, row["object_key"])
-        analysis = await analyze_image(embedder, data)
+        analysis = await _analyze_with_recovery(embedder, data)
         quality = await asyncio.to_thread(image_quality, data)
         updated = await db.execute_returning(
             """
