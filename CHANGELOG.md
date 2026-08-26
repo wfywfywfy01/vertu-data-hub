@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Reduced private Qwen image payloads to a proven 768-pixel bound and extended transient recovery for low-memory real-image processing.
 - Added one bounded retry for transient text/Qwen provider failures and a deployment-blocking end-to-end provider probe with secret-safe output.
 - Added private Qwen vision analysis for image descriptions and labels, reusing text Embedding for low-memory semantic image retrieval with fail-safe fallback.
 - Replaced local Chinese-CLIP/PyTorch image retrieval with DashScope multimodal embeddings, strict sensitivity routing, API fallback, and idempotent backfill.

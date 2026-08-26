@@ -333,3 +333,13 @@ Acceptance evidence:
 - Qwen `/v1/models` and `/v1/chat/completions` returned HTTP 200 from Caddy and
   llama.cpp. The end-to-end provider probe then passed the generated image,
   Qwen description, and OpenRouter 1024-dimension vector stages.
+
+## 2026-08-26: real-image Qwen stability
+
+- The first 3728x2562 production image exposed transient 502/503 responses that
+  the blank-image provider probe did not reproduce.
+- A read-only diagnostic showed that a 768-pixel, 30 KB JPEG completed against
+  Qwen in 8.06 seconds. Qwen payloads are now bounded to 768 pixels and 512 KB,
+  while local OCR continues to use the original image.
+- Qwen now retries network errors, HTTP 429, and 5xx responses up to three times
+  with a two-second recovery interval.
