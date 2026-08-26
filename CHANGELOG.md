@@ -34,4 +34,4 @@
 - `python -m pytest -q`: 127 passed.
 - Compilation, dependency, repeatable schema, development Compose, and production Compose checks passed.
 - Production OpenRouter returned valid 1024-dimension embeddings in five consecutive probes; the timeout is now 10 seconds.
-- Real Qwen image acceptance remains pending recovery of the configured model upstream, which currently returns HTTP 502 after successful gateway authentication.
+- Real Qwen model, text chat, and image-to-text-to-1024-vector acceptance passed after the configured llama.cpp upstream recovered.

@@ -330,7 +330,6 @@ Acceptance evidence:
 - Compilation and development/production Compose validation passed.
 - Production OpenRouter: five consecutive `baai/bge-m3` probes passed at 1024
   dimensions in 1.19-1.84 seconds.
-- Qwen gateway authentication and TLS pass, but Caddy still returns an empty
-  HTTP 502. The model host accepts SSH, while the available local keys are not
-  authorized; production cutover remains blocked until its upstream process is
-  restored and the provider probe passes.
+- Qwen `/v1/models` and `/v1/chat/completions` returned HTTP 200 from Caddy and
+  llama.cpp. The end-to-end provider probe then passed the generated image,
+  Qwen description, and OpenRouter 1024-dimension vector stages.
