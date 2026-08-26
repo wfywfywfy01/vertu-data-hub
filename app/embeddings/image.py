@@ -63,11 +63,11 @@ def _jpeg_data_url(data: bytes) -> str:
 
     image, _image_format = _open_image(data)
     try:
-        for edge, quality in ((1600, 82), (1280, 75), (1024, 70)):
+        for edge, quality in ((768, 70), (512, 65), (384, 60)):
             image.thumbnail((edge, edge))
             output = io.BytesIO()
             image.save(output, format="JPEG", quality=quality, optimize=True)
-            if output.tell() <= 3 * 1024 * 1024:
+            if output.tell() <= 512 * 1024:
                 break
         else:
             raise ImageEmbeddingUnavailableError(
@@ -125,8 +125,8 @@ class ApiImageEmbedder:
 class QwenImageEmbedder:
     """Use an OpenAI-compatible Qwen vision endpoint, then embed its description."""
 
-    MAX_ATTEMPTS = 2
-    RETRY_DELAY_SECONDS = 0.25
+    MAX_ATTEMPTS = 3
+    RETRY_DELAY_SECONDS = 2.0
 
     PROMPT = (
         "分析这张经销商业务图片。只输出 JSON，不要 Markdown："

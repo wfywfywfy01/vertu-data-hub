@@ -35,7 +35,13 @@ async def test_api_image_embedding_normalizes_to_supported_jpeg(monkeypatch):
     await embedder.embed_image(output.getvalue())
 
     assert captured[0]["image"].startswith("data:image/jpeg;base64,")
-    assert len(base64.b64decode(captured[0]["image"].split(",", 1)[1])) <= 3 * 1024 * 1024
+    encoded = base64.b64decode(captured[0]["image"].split(",", 1)[1])
+    normalized = Image.open(BytesIO(encoded))
+    try:
+        assert max(normalized.size) <= 768
+    finally:
+        normalized.close()
+    assert len(encoded) <= 512 * 1024
 
 
 async def test_api_image_embedding_rejects_invalid_vector(monkeypatch):
@@ -123,7 +129,7 @@ async def test_qwen_image_embedding_uses_description_and_labels(monkeypatch):
     monkeypatch.setattr("app.embeddings.image.httpx.AsyncClient", lambda **_kwargs: Client())
     monkeypatch.setattr("app.embeddings.text.get_text_embedder", lambda: TextEmbedder())
     output = BytesIO()
-    Image.new("RGB", (10, 10), "white").save(output, format="PNG")
+    Image.new("RGB", (1800, 1200), "white").save(output, format="PNG")
 
     analysis = await QwenImageEmbedder().analyze_image(output.getvalue())
 
@@ -183,6 +189,7 @@ async def test_qwen_image_embedding_retries_transient_status(monkeypatch):
     request = httpx.Request("POST", "https://qwen.test/v1/chat/completions")
     responses = [
         httpx.Response(502, request=request),
+        httpx.Response(503, request=request),
         httpx.Response(
             200,
             request=request,
@@ -220,7 +227,7 @@ async def test_qwen_image_embedding_retries_transient_status(monkeypatch):
 
     assert description == "VERTU 发布会合影"
     assert labels == ("发布会",)
-    assert len(calls) == 2
+    assert len(calls) == 3
 
 
 async def test_qwen_query_embedding_wraps_text_service_failure(monkeypatch):
