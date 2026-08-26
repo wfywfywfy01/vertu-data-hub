@@ -136,6 +136,11 @@ async def test_qwen_image_embedding_uses_description_and_labels(monkeypatch):
     assert captured["url"] == "https://qwen.test:8443/v1/chat/completions"
     image_url = captured["json"]["messages"][0]["content"][1]["image_url"]["url"]
     assert image_url.startswith("data:image/jpeg;base64,")
+    normalized = Image.open(BytesIO(base64.b64decode(image_url.split(",", 1)[1])))
+    try:
+        assert max(normalized.size) <= 512
+    finally:
+        normalized.close()
     assert analysis.description == "VERTU 发布会上的多人合影，联系 [REDACTED_EMAIL]"
     assert analysis.labels == ("发布会", "多人合影", "VERTU")
     assert "多人合影" in captured["text"]
@@ -202,7 +207,7 @@ async def test_qwen_image_embedding_retries_transient_status(monkeypatch):
             },
         ),
     ]
-    calls = []
+    image_edges = []
 
     class Client:
         async def __aenter__(self):
@@ -211,8 +216,13 @@ async def test_qwen_image_embedding_retries_transient_status(monkeypatch):
         async def __aexit__(self, *_args):
             return None
 
-        async def post(self, *_args, **_kwargs):
-            calls.append(1)
+        async def post(self, *_args, **kwargs):
+            image_url = kwargs["json"]["messages"][0]["content"][1]["image_url"]["url"]
+            image = Image.open(BytesIO(base64.b64decode(image_url.split(",", 1)[1])))
+            try:
+                image_edges.append(max(image.size))
+            finally:
+                image.close()
             return responses.pop(0)
 
     async def no_delay(_seconds):
@@ -221,13 +231,13 @@ async def test_qwen_image_embedding_retries_transient_status(monkeypatch):
     monkeypatch.setattr("app.embeddings.image.httpx.AsyncClient", lambda **_kwargs: Client())
     monkeypatch.setattr("app.embeddings.image.asyncio.sleep", no_delay)
     output = BytesIO()
-    Image.new("RGB", (10, 10), "white").save(output, format="PNG")
+    Image.new("RGB", (1800, 1200), "white").save(output, format="PNG")
 
     description, labels = await QwenImageEmbedder()._describe(output.getvalue())
 
     assert description == "VERTU 发布会合影"
     assert labels == ("发布会",)
-    assert len(calls) == 3
+    assert image_edges == [512, 384, 384]
 
 
 async def test_qwen_query_embedding_wraps_text_service_failure(monkeypatch):

@@ -56,14 +56,18 @@ def image_model_identity() -> str:
     return settings.image_embedding_model
 
 
-def _jpeg_data_url(data: bytes) -> str:
+def _jpeg_data_url(data: bytes, *, max_edge: int = 768) -> str:
     import base64
 
     from app.processing.images import _open_image
 
     image, _image_format = _open_image(data)
     try:
-        for edge, quality in ((768, 70), (512, 65), (384, 60)):
+        for edge, quality in (
+            profile
+            for profile in ((768, 70), (512, 65), (384, 60))
+            if profile[0] <= max_edge
+        ):
             image.thumbnail((edge, edge))
             output = io.BytesIO()
             image.save(output, format="JPEG", quality=quality, optimize=True)
@@ -179,19 +183,23 @@ class QwenImageEmbedder:
     async def _post_description(
         self, client: httpx.AsyncClient, data: bytes
     ) -> httpx.Response:
-        payload = {
-            "model": self.model,
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": self.PROMPT},
-                    {"type": "image_url", "image_url": {"url": _jpeg_data_url(data)}},
-                ],
-            }],
-            "temperature": 0,
-            "max_tokens": 500,
-        }
         for attempt in range(self.MAX_ATTEMPTS):
+            edge = 512 if attempt == 0 else 384
+            payload = {
+                "model": self.model,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": self.PROMPT},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": _jpeg_data_url(data, max_edge=edge)},
+                        },
+                    ],
+                }],
+                "temperature": 0,
+                "max_tokens": 500,
+            }
             try:
                 response = await client.post(
                     self.chat_url,
