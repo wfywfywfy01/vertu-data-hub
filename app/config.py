@@ -69,6 +69,9 @@ class Settings:
     answer_min_semantic_similarity: float = float(
         _env("ANSWER_MIN_SEMANTIC_SIMILARITY", "0.35")
     )
+    search_min_semantic_similarity: float = float(
+        _env("SEARCH_MIN_SEMANTIC_SIMILARITY", "0.15")
+    )
 
     # 文件类数据源监听根目录
     watched_root: str = _env("WATCHED_ROOT", r"D:\vertu-agent-数据待处理")
@@ -109,6 +112,8 @@ def validate_production_settings(value: Settings = settings) -> None:
         raise RuntimeError("EMBEDDING_TIMEOUT_SECONDS must be between 1 and 60")
     if not 1 <= getattr(value, "image_embedding_timeout_seconds", 20) <= 60:
         raise RuntimeError("IMAGE_EMBEDDING_TIMEOUT_SECONDS must be between 1 and 60")
+    if not -1 <= getattr(value, "search_min_semantic_similarity", 0.15) <= 1:
+        raise RuntimeError("SEARCH_MIN_SEMANTIC_SIMILARITY must be between -1 and 1")
     if not 5 <= getattr(value, "media_keyframe_interval_seconds", 30) <= 600:
         raise RuntimeError("MEDIA_KEYFRAME_INTERVAL_SECONDS must be between 5 and 600")
     if not 1 <= getattr(value, "media_max_keyframes", 60) <= 300:

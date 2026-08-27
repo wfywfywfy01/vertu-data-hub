@@ -150,6 +150,8 @@ async def search_images(
 
     results = []
     for row in rows:
+        if float(row["semantic_similarity"]) < settings.search_min_semantic_similarity:
+            continue
         labels = list(row.get("semantic_labels") or [])
         label_text = "、".join(str(item.get("label")) for item in labels if item.get("label"))
         citation = {
