@@ -106,6 +106,38 @@ async def test_image_query_is_redacted_before_embedding(monkeypatch):
     assert "[REDACTED_EMAIL]" in captured["text"]
 
 
+async def test_image_search_rejects_low_similarity_results(monkeypatch):
+    dealer_id = uuid4()
+
+    class Embedder:
+        async def embed_text(self, _text):
+            return [1.0] + [0.0] * 1023
+
+    async def fetch_all(_query, _params):
+        return [{
+            "asset_id": uuid4(), "dealer_id": dealer_id, "scope_type": "dealer",
+            "scope_key": str(dealer_id), "title": "无关图片", "category": "media",
+            "sensitivity": "internal", "asset_version_id": uuid4(), "version_number": 1,
+            "original_name": "unrelated.jpg", "quality_score": 0.9,
+            "semantic_labels": [], "semantic_similarity": -0.04, "score": -0.01,
+        }]
+
+    async def execute(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(image_search, "get_image_embedder", lambda: Embedder())
+    monkeypatch.setattr(image_search.settings, "image_embedding_provider", "api")
+    monkeypatch.setattr(image_search.settings, "search_min_semantic_similarity", 0.15)
+    monkeypatch.setattr(image_search.db, "fetch_all", fetch_all)
+    monkeypatch.setattr(image_search.db, "execute", execute)
+
+    rows = await image_search.search_images(
+        "越南发布会照片", dealer_ids=[dealer_id], actor_id="pytest"
+    )
+
+    assert rows == []
+
+
 async def test_image_metadata_fallback_keeps_authorization_scope(monkeypatch):
     dealer_id = uuid4()
     asset_id = uuid4()

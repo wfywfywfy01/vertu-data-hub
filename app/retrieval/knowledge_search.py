@@ -9,6 +9,7 @@ from uuid import UUID
 from psycopg.types.json import Jsonb
 
 from app import db
+from app.config import settings
 from app.embeddings.text import EmbeddingUnavailableError, get_text_embedder, vector_literal
 from app.knowledge.scopes import authorized_scope_sql
 from app.processing.redaction import redact_text
@@ -207,6 +208,12 @@ async def search_knowledge(
             """,
             [literal, *scope_params, literal, candidates],
         )
+        vector_hits = [
+            row
+            for row in vector_hits
+            if float(row.get("semantic_similarity") or -1)
+            >= settings.search_min_semantic_similarity
+        ]
     text_hits = await db.fetch_all(
         f"""
         {BASE_SELECT},

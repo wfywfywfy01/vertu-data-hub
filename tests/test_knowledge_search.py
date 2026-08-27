@@ -122,3 +122,39 @@ def test_rrf_rewards_chunk_found_by_both_retrievers():
     assert results[0]["text"] == "shared"
     assert results[0]["semantic_similarity"] == 0.8
     assert results[0]["lexical_score"] == 0.5
+
+
+async def test_low_similarity_vector_hit_is_not_returned(monkeypatch):
+    dealer_id = uuid.uuid4()
+
+    class Embedder:
+        async def embed(self, _texts):
+            return [[0.0] * 1024]
+
+    async def fetch_all(query, _params):
+        if "semantic_similarity" in query:
+            return [{
+                "chunk_id": uuid.uuid4(), "dealer_id": dealer_id,
+                "scope_type": "dealer", "scope_key": str(dealer_id),
+                "asset_version_id": uuid.uuid4(), "asset_id": uuid.uuid4(),
+                "text": "不相关测试资料", "section": None, "page_start": 1,
+                "page_end": 1, "citation": {}, "title": "测试档案",
+                "category": "dealer_profile", "sensitivity": "internal",
+                "version_number": 1, "original_name": "test.md",
+                "semantic_similarity": -0.04,
+            }]
+        return []
+
+    async def execute(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(knowledge_search, "get_text_embedder", lambda: Embedder())
+    monkeypatch.setattr(knowledge_search.settings, "search_min_semantic_similarity", 0.15)
+    monkeypatch.setattr(knowledge_search.db, "fetch_all", fetch_all)
+    monkeypatch.setattr(knowledge_search.db, "execute", execute)
+
+    results = await knowledge_search.search_knowledge(
+        "越南发布会照片", dealer_ids=[dealer_id], actor_id="pytest"
+    )
+
+    assert results == []
