@@ -1,0 +1,10 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+ARG RELEASE_REVISION
+LABEL org.opencontainers.image.revision=${RELEASE_REVISION}
+
+USER root
+COPY --chown=app:app app /app/app
+COPY --chown=app:app run_api.py /app/run_api.py
+USER app
