@@ -34,6 +34,46 @@ def _queue_for(content_type: str) -> str:
     return "documents"
 
 
+def _require_same_asset_policy(asset: dict, metadata: dict) -> None:
+    current = {
+        "category": asset["category"],
+        "sensitivity": asset["sensitivity"],
+        "store_id": str(asset["store_id"]) if asset["store_id"] is not None else None,
+    }
+    if any(current[key] != metadata[key] for key in current):
+        raise ValueError(
+            "asset metadata conflict: category, sensitivity or store differs; "
+            "use a separate metadata update workflow"
+        )
+
+
+async def _require_same_registration(conn, existing: dict, metadata: dict) -> None:
+    _require_same_asset_policy(existing["asset"], metadata)
+    expected = existing["job"]["input_data"].get("registration_metadata")
+    if expected is None:
+        # Older jobs have no request snapshot; compare their persisted metadata.
+        cur = await conn.execute(
+            "SELECT content_hash FROM source_object WHERE id = %s",
+            (existing["version"]["source_object_id"],),
+        )
+        source = await cur.fetchone()
+        asset = existing["asset"]
+        expected = {
+            "logical_key": asset["logical_key"],
+            "title": asset["title"],
+            "category": asset["category"],
+            "sensitivity": asset["sensitivity"],
+            "store_id": str(asset["store_id"]) if asset["store_id"] is not None else None,
+            "language_code": existing["version"]["language_code"],
+            "content_hash": source["content_hash"],
+        }
+    if expected != metadata:
+        raise ValueError(
+            "idempotency metadata conflict; retry the original request or "
+            "use a separate metadata update workflow"
+        )
+
+
 async def register_asset_version(
     *,
     dealer_id: UUID | str | None = None,
@@ -81,10 +121,24 @@ async def register_asset_version(
         raise ValueError("byte_size must be positive")
     if scope.scope_type != "dealer" and store_id is not None:
         raise ValueError("shared assets cannot belong to a dealer store")
+    store_id = UUID(str(store_id)) if store_id is not None else None
+    registration_metadata = {
+        "logical_key": logical,
+        "title": title,
+        "category": category,
+        "sensitivity": sensitivity,
+        "store_id": str(store_id) if store_id is not None else None,
+        "language_code": language_code,
+        "content_hash": content_hash,
+    }
 
     pool = await db.get_pool()
     async with pool.connection() as conn:
         async with conn.transaction():
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (idempotency_key,),
+            )
             existing = await _job_bundle(conn, idempotency_key)
             if existing:
                 if (
@@ -94,6 +148,7 @@ async def register_asset_version(
                     if existing["asset"]["scope_type"] == scope.scope_type == "dealer":
                         raise ValueError("idempotency key belongs to another dealer")
                     raise ValueError("idempotency key belongs to another knowledge scope")
+                await _require_same_registration(conn, existing, registration_metadata)
                 existing["duplicate"] = True
                 return existing
 
@@ -122,6 +177,7 @@ async def register_asset_version(
             )
             source = await cur.fetchone()
 
+            # Lock the asset without changing metadata until new content is confirmed.
             cur = await conn.execute(
                 """
                 INSERT INTO knowledge_asset
@@ -129,11 +185,7 @@ async def register_asset_version(
                      category, sensitivity, created_by)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (scope_type, scope_key, logical_key) DO UPDATE SET
-                    store_id = EXCLUDED.store_id,
-                    title = EXCLUDED.title,
-                    category = EXCLUDED.category,
-                    sensitivity = EXCLUDED.sensitivity,
-                    updated_at = now()
+                    logical_key = EXCLUDED.logical_key
                 RETURNING *
                 """,
                 (
@@ -142,6 +194,7 @@ async def register_asset_version(
                 ),
             )
             asset = await cur.fetchone()
+            _require_same_asset_policy(asset, registration_metadata)
 
             cur = await conn.execute(
                 """
@@ -178,8 +231,9 @@ async def register_asset_version(
                 )
                 version = await cur.fetchone()
                 await conn.execute(
-                    "UPDATE knowledge_asset SET status = 'received', updated_at = now() WHERE id = %s",
-                    (asset["id"],),
+                    "UPDATE knowledge_asset SET title = %s, status = 'received', "
+                    "updated_at = now() WHERE id = %s",
+                    (title, asset["id"]),
                 )
 
             job_status = "succeeded" if duplicate_content else "queued"
@@ -195,7 +249,10 @@ async def register_asset_version(
                 (
                     scope.dealer_id, version["id"], _queue_for(content_type), job_status,
                     100 if duplicate_content else 0, idempotency_key,
-                    Jsonb({"source_object_id": str(source["id"])}),
+                    Jsonb({
+                        "source_object_id": str(source["id"]),
+                        "registration_metadata": registration_metadata,
+                    }),
                     Jsonb({"duplicate_content": duplicate_content}), job_status,
                 ),
             )
