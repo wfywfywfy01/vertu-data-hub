@@ -18,6 +18,7 @@ from app.processing.images import extract_image
 from app.processing.redaction import redact_text
 from app.processing.sensitivity import high_sensitivity_reasons
 from app.storage import build_scoped_derived_key, file_hash, get_storage
+from app.workers.execution import assert_job_owner, attempt_artifact_name
 
 
 PIPELINE_VERSION = "media-v1"
@@ -57,6 +58,7 @@ async def _save_output(context: dict, records: list[dict], vectors: list[list[fl
     pool = await db.get_pool()
     async with pool.connection() as conn:
         async with conn.transaction():
+            await assert_job_owner(conn)
             await conn.execute(
                 "DELETE FROM content_chunk WHERE asset_version_id = %s",
                 (context["asset_version_id"],),
@@ -195,7 +197,7 @@ async def process_media_job(job_id, *, storage=None) -> dict:
                     f"[{row['start']:.1f}-{row['end']:.1f}] {row['text']}" for row in records
                 ).encode("utf-8")
                 key = build_scoped_derived_key(
-                    scope, context["asset_version_id"], "media-transcript-v1.md"
+                    scope, context["asset_version_id"], attempt_artifact_name("media-transcript-v1.md")
                 )
                 await asyncio.to_thread(storage.put_object, key, markdown, content_type="text/markdown")
                 artifacts.append({
@@ -215,7 +217,7 @@ async def process_media_job(job_id, *, storage=None) -> dict:
                     "source": "video_keyframe",
                 })
                 key = build_scoped_derived_key(
-                    scope, context["asset_version_id"], f"keyframe-{index:03d}.jpg"
+                    scope, context["asset_version_id"], attempt_artifact_name(f"keyframe-{index:03d}.jpg")
                 )
                 await asyncio.to_thread(storage.put_object, key, data, content_type="image/jpeg")
                 artifacts.append({

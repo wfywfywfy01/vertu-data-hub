@@ -16,7 +16,7 @@ def test_csv_is_extracted_as_plain_text(tmp_path):
 
 
 def test_docling_pages_keep_page_citations(tmp_path, monkeypatch):
-    path = tmp_path / "policy.pdf"
+    path = tmp_path / "policy.docx"
     path.write_bytes(b"fake")
 
     class FakeDocument:
@@ -80,10 +80,37 @@ def test_scanned_pdf_uses_ocr_and_keeps_page_citation(tmp_path, monkeypatch):
     monkeypatch.setattr(
         documents,
         "_extract_pdf_ocr_pages",
-        lambda _path, language: [(1, f"OCR {language} Safiran Hamrah")],
+        lambda _path, language, pages: [(1, f"OCR {language} Safiran Hamrah")],
     )
 
     extracted = documents.extract_document(path, "fa")
 
     assert extracted.chunks[0].page_start == 1
     assert "OCR fa Safiran Hamrah" in extracted.markdown
+
+
+def test_mixed_pdf_only_ocrs_blank_pages_without_docling(tmp_path, monkeypatch):
+    path = tmp_path / "mixed.pdf"
+    path.write_bytes(b"fake")
+    monkeypatch.setattr(documents, "_convert_with_docling", lambda _: pytest.fail("PDF must not load Docling"))
+    monkeypatch.setattr(documents, "_extract_pdf_pages", lambda _: [(1, "Cover"), (2, "  "), (3, "Appendix")])
+    calls = []
+    def ocr(path, language, pages):
+        calls.append(pages)
+        return [(2, "Scanned contract")]
+    monkeypatch.setattr(documents, "_extract_pdf_ocr_pages", ocr)
+    result = documents.extract_document(path)
+    assert calls == [{2}]
+    assert [chunk.page_start for chunk in result.chunks] == [1, 2, 3]
+    assert "Scanned contract" in result.markdown
+
+
+def test_pdf_page_limit_checked_before_text_or_render(tmp_path):
+    import pypdfium2 as pdfium
+    path = tmp_path / "long.pdf"
+    with pdfium.PdfDocument.new() as pdf:
+        for _ in range(documents.MAX_PDF_PAGES + 1):
+            pdf.new_page(20, 20).close()
+        pdf.save(str(path))
+    with pytest.raises(ValueError, match="200-page"):
+        documents.extract_document(path)

@@ -26,7 +26,6 @@ from app.config import settings
 from app.knowledge import assets, dealers
 from app.knowledge.scopes import KnowledgeScope, resolve_scope
 from app.queue import enqueue_processing_job
-from app.processing.previews import image_preview
 from app.processing.redaction import redact_text
 from app.retrieval.search import search_assets
 from app.storage import (
@@ -137,6 +136,7 @@ async def _content_context(
     claims: ServiceClaims,
     *,
     allowed_statuses: frozenset[str] = frozenset({"searchable"}),
+    asset_version_id: UUID | None = None,
 ) -> dict:
     asset = await assets.get_asset(
         asset_id,
@@ -151,9 +151,14 @@ async def _content_context(
                s.original_name, s.content_type, s.byte_size
         FROM asset_version v
         JOIN source_object s ON s.id = v.source_object_id
-        WHERE v.asset_id = %s AND v.is_current
+        WHERE v.asset_id = %s
+          AND ((%s::uuid IS NULL AND v.is_current) OR v.id = %s::uuid)
+          AND (v.is_current OR EXISTS (
+              SELECT 1 FROM processing_job j WHERE j.asset_version_id = v.id
+              AND j.status = 'succeeded' AND NOT coalesce((j.output_data->>'quarantined')::boolean, false)
+          ))
         """,
-        (asset_id,),
+        (asset_id, asset_version_id, asset_version_id),
     )
     if not row:
         raise ApiError(404, "asset_content_not_found", "Asset content was not found")
@@ -357,15 +362,25 @@ async def get_asset(asset_id: UUID, claims: ServiceClaims = Depends(require_serv
 async def preview_asset_content(
     asset_id: UUID,
     request: Request,
+    asset_version_id: UUID | None = None,
     claims: ServiceClaims = Depends(require_service_claims),
 ):
-    context = await _content_context(asset_id, claims)
+    context = await _content_context(asset_id, claims, asset_version_id=asset_version_id)
     if context["content_type"].startswith("image/"):
+        artifact = await db.fetch_one(
+            """SELECT bucket, object_key, content_hash FROM derived_artifact
+               WHERE asset_version_id = %s AND artifact_type = 'safe_preview'
+                 AND pipeline_version = 'safe-preview-v1'""",
+            (context["asset_version_id"],),
+        )
+        if not artifact:
+            raise ApiError(409, "safe_preview_pending", "Safe image preview needs reprocessing; original requires administrator export")
         try:
-            source = await asyncio.to_thread(
-                _source_storage(context).download_bytes, context["object_key"]
+            content = await asyncio.to_thread(
+                _source_storage(artifact).download_bytes, artifact["object_key"]
             )
-            content = await asyncio.to_thread(image_preview, source)
+            if hashlib.sha256(content).hexdigest() != artifact["content_hash"]:
+                raise ValueError("preview integrity mismatch")
         except (ObjectNotFoundError, ValueError):
             raise ApiError(404, "asset_content_not_found", "Asset content was not found") from None
         except Exception as exc:
@@ -375,7 +390,7 @@ async def preview_asset_content(
             action="asset.previewed",
             context=context,
             request=request,
-            payload={"preview_type": "watermarked_image"},
+            payload={"preview_type": "redacted_image"},
         )
         return Response(
             content,

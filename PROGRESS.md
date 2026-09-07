@@ -1,5 +1,16 @@
 # Progress
 
+## 2026-09-07: Review remediation in isolated worktrees
+
+- Implemented bounded PDF parsing, mixed-page OCR, streamed source verification,
+  database-fenced job recovery, low-memory worker settings and ingestion health.
+- Previews are version-pinned and image pixels are served only from redacted
+  derived artifacts. Legacy images need safe-preview backfill before display.
+- Sensitive text remains redacted after administrator review.
+- CI publishing depends on tests; incomplete overlay releases are retired.
+- Production remains unchanged until integrated tests, review, migration and
+  deployment checks pass. No production completion is claimed here.
+
 ## 2026-08-25：4 GiB 云端多模态图片检索
 
 - 移除在线 Chinese CLIP、PyTorch/Transformers 显式依赖和模型预热。

@@ -24,8 +24,10 @@ from app.knowledge import assets
 from app.knowledge.scopes import resolve_scope
 from app.processing.images import ImageExtraction, extract_image, image_quality
 from app.processing.redaction import redact_text
+from app.processing.previews import image_preview
 from app.processing.sensitivity import high_sensitivity_reasons
 from app.storage import build_scoped_derived_key, get_storage
+from app.workers.execution import assert_job_owner, attempt_artifact_name
 
 
 PIPELINE_VERSION = "image-v1"
@@ -92,6 +94,7 @@ async def _save_output(
     pool = await db.get_pool()
     async with pool.connection() as conn:
         async with conn.transaction():
+            await assert_job_owner(conn)
             await conn.execute(
                 "DELETE FROM content_chunk WHERE asset_version_id = %s",
                 (context["asset_version_id"],),
@@ -273,7 +276,7 @@ async def process_image_job(job_id, *, storage=None) -> dict:
                     scope_key=context["scope_key"],
                 ),
                 context["asset_version_id"],
-                "ocr-image-v1.md",
+                attempt_artifact_name("ocr-image-v1.md"),
             )
             await asyncio.to_thread(
                 storage.put_object, artifact_key, artifact, content_type="text/markdown"
@@ -293,6 +296,30 @@ async def process_image_job(job_id, *, storage=None) -> dict:
             quality_score=quality_score,
             semantic_labels=semantic_labels,
         )
+        preview = await asyncio.to_thread(
+            image_preview, source, text_boxes=extracted.text_boxes,
+            restricted=bool(reasons),
+        )
+        preview_key = build_scoped_derived_key(
+            resolve_scope(dealer_id=context["dealer_id"], scope_type=context["scope_type"],
+                          scope_key=context["scope_key"]),
+            context["asset_version_id"], attempt_artifact_name("safe-preview-v1.jpg"),
+        )
+        await asyncio.to_thread(storage.put_object, preview_key, preview, content_type="image/jpeg")
+        pool = await db.get_pool()
+        async with pool.connection() as conn, conn.transaction():
+            await assert_job_owner(conn)
+            await conn.execute(
+            """INSERT INTO derived_artifact
+               (dealer_id, asset_version_id, artifact_type, bucket, object_key,
+                content_hash, content_type, byte_size, pipeline_version)
+               VALUES (%s, %s, 'safe_preview', %s, %s, %s, 'image/jpeg', %s, 'safe-preview-v1')
+               ON CONFLICT (asset_version_id, artifact_type, pipeline_version) DO UPDATE SET
+                 object_key = EXCLUDED.object_key, content_hash = EXCLUDED.content_hash,
+                 byte_size = EXCLUDED.byte_size, created_at = now()""",
+            (context["dealer_id"], context["asset_version_id"], context["bucket"], preview_key,
+             hashlib.sha256(preview).hexdigest(), len(preview)),
+            )
         output = {
             "ocr_line_count": extracted.line_count,
             "artifact_key": artifact_key,

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Hardened ETL with lightweight bounded PDF extraction, page-level OCR, streaming integrity checks, late acknowledgements, execution fencing, bounded recovery and worker resources.
+- Added ingestion health checks, version-pinned previews, stored text-masked image previews, and sensitive credential/card redaction after approval.
+- Made image publication depend on tests and retired incomplete overlay releases.
+
 - Reduced private Qwen image payloads to a proven 768-pixel bound and extended transient recovery for low-memory real-image processing.
 - Added one bounded retry for transient text/Qwen provider failures and a deployment-blocking end-to-end provider probe with secret-safe output.
 - Added private Qwen vision analysis for image descriptions and labels, reusing text Embedding for low-memory semantic image retrieval with fail-safe fallback.

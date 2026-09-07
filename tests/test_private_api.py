@@ -741,7 +741,7 @@ async def test_asset_content_returns_safe_image_preview(client, monkeypatch):
     Image.new("RGB", (1800, 1200), "white").save(source, format="PNG")
     audited = {}
 
-    async def context(_asset_id, claims):
+    async def context(_asset_id, claims, **kwargs):
         assert _asset_id == asset_id
         assert dealer_id in claims.dealer_ids
         return {
@@ -757,9 +757,17 @@ async def test_asset_content_returns_safe_image_preview(client, monkeypatch):
             "byte_size": len(source.getvalue()),
         }
 
+    from app.processing.previews import image_preview
+    safe_preview = image_preview(source.getvalue(), text_boxes=())
+
+    async def artifact(_query, _params):
+        return {"bucket": "local-inbox", "object_key": "safe-preview.jpg",
+                "content_hash": hashlib.sha256(safe_preview).hexdigest()}
+
     class Storage:
         def download_bytes(self, _key):
-            return source.getvalue()
+            assert _key == "safe-preview.jpg"
+            return safe_preview
 
     async def audit(**kwargs):
         audited.update(kwargs)
@@ -767,6 +775,7 @@ async def test_asset_content_returns_safe_image_preview(client, monkeypatch):
     monkeypatch.setattr(routes, "_content_context", context)
     monkeypatch.setattr(routes, "_source_storage", lambda _context: Storage())
     monkeypatch.setattr(routes, "_audit_content_access", audit)
+    monkeypatch.setattr(routes.db, "fetch_one", artifact)
 
     response = await client.get(
         f"/v1/assets/{asset_id}/content",
@@ -779,6 +788,44 @@ async def test_asset_content_returns_safe_image_preview(client, monkeypatch):
     with Image.open(BytesIO(response.content)) as preview:
         assert max(preview.size) == 1280
     assert audited["action"] == "asset.previewed"
+
+
+async def test_missing_safe_preview_never_reads_original(client, monkeypatch):
+    from app.api import routes
+    asset_id, version_id = uuid.uuid4(), uuid.uuid4()
+    async def context(*args, **kwargs):
+        return {"asset_version_id": version_id, "content_type": "image/jpeg"}
+    async def absent(*args):
+        return None
+    monkeypatch.setattr(routes, "_content_context", context)
+    monkeypatch.setattr(routes.db, "fetch_one", absent)
+    monkeypatch.setattr(routes, "_source_storage", lambda _: pytest.fail("must not read original"))
+    response = await client.get(f"/v1/assets/{asset_id}/content", headers={"Authorization": f"Bearer {_token()}"})
+    assert response.status_code == 409
+    assert response.json()["code"] == "safe_preview_pending"
+
+
+async def test_preview_version_is_validated_and_forwarded(client, monkeypatch):
+    from app.api import routes
+    asset_id, version_id = uuid.uuid4(), uuid.uuid4()
+    seen = []
+    async def context(*args, **kwargs):
+        seen.append(kwargs["asset_version_id"])
+        return {"asset_version_id": version_id, "content_type": "text/plain", "title": "Evidence"}
+    async def chunks(*args):
+        return [{"text": "Historical evidence"}]
+    async def audit(**kwargs):
+        pass
+    monkeypatch.setattr(routes, "_content_context", context)
+    monkeypatch.setattr(routes.db, "fetch_all", chunks)
+    monkeypatch.setattr(routes, "_audit_content_access", audit)
+    headers = {"Authorization": f"Bearer {_token()}"}
+    response = await client.get(f"/v1/assets/{asset_id}/content?asset_version_id={version_id}", headers=headers)
+    assert response.status_code == 200
+    assert response.text == "Historical evidence"
+    assert seen == [version_id]
+    response = await client.get(f"/v1/assets/{asset_id}/content?asset_version_id=invalid", headers=headers)
+    assert response.status_code == 422
 
 
 @pytest.fixture

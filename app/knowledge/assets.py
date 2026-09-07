@@ -444,6 +444,7 @@ async def transition_job(
     error_message: str | None = None,
     output_data: dict | None = None,
 ) -> dict:
+    from app.workers.execution import check_job_owner
     if status not in TRANSITIONS:
         raise ValueError("unknown job status")
     pool = await db.get_pool()
@@ -453,6 +454,7 @@ async def transition_job(
             job = await cur.fetchone()
             if not job:
                 raise ValueError("job not found")
+            check_job_owner(job)
             if status not in TRANSITIONS[job["status"]]:
                 raise ValueError(f"invalid job transition: {job['status']} -> {status}")
             next_progress = 100 if status == "succeeded" else (job["progress"] if progress is None else progress)

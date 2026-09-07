@@ -17,7 +17,8 @@ from app.processing.documents import CitedChunk, ExtractedDocument, extract_docu
 from app.processing.redaction import redact_text
 from app.processing.sensitivity import high_sensitivity_reasons
 from app.queue import celery_app
-from app.storage import build_scoped_derived_key, get_storage
+from app.storage import build_scoped_derived_key, get_storage, file_hash
+from app.workers.execution import assert_job_owner, attempt_artifact_name, job_execution
 
 
 PIPELINE_VERSION = "document-v2"
@@ -64,6 +65,7 @@ async def _save_output(
     pool = await db.get_pool()
     async with pool.connection() as conn:
         async with conn.transaction():
+            await assert_job_owner(conn)
             await conn.execute(
                 "DELETE FROM content_chunk WHERE asset_version_id = %s",
                 (context["asset_version_id"],),
@@ -136,10 +138,9 @@ async def process_document_job(job_id, *, storage=None) -> dict:
         with tempfile.TemporaryDirectory(prefix="dealer-doc-") as temporary:
             source_path = Path(temporary) / f"source{suffix}"
             await asyncio.to_thread(storage.download_to_file, context["object_key"], source_path)
-            source_bytes = source_path.read_bytes()
             if (
-                len(source_bytes) != context["byte_size"]
-                or hashlib.sha256(source_bytes).hexdigest() != context["content_hash"]
+                source_path.stat().st_size != context["byte_size"]
+                or await asyncio.to_thread(file_hash, source_path) != context["content_hash"]
             ):
                 raise PermanentProcessingError(
                     "source_integrity_error", "downloaded object does not match registered size or hash"
@@ -167,7 +168,7 @@ async def process_document_job(job_id, *, storage=None) -> dict:
                     scope_key=context["scope_key"],
                 ),
                 context["asset_version_id"],
-                "document-v2.md",
+                attempt_artifact_name("document-v2.md"),
             )
             await asyncio.to_thread(
                 storage.put_object,
@@ -211,6 +212,13 @@ async def process_document_job(job_id, *, storage=None) -> dict:
 
 
 async def process_routed_job(job_id: str) -> dict:
+    async with job_execution(job_id) as acquired:
+        if not acquired:
+            return {"status": "already_running", "retryable": False}
+        return await _process_routed_job(job_id)
+
+
+async def _process_routed_job(job_id: str) -> dict:
     job = await assets.get_job(job_id)
     if job and job["queue_name"] == "images":
         from app.workers.image import process_image_job
@@ -245,3 +253,15 @@ def process_asset_task(self, job_id: str):
     if should_retry:
         raise self.retry(countdown=min(60, 5 * (2 ** self.request.retries)))
     return result
+
+
+@celery_app.task(name="dealer_knowledge.reconcile_jobs")
+def reconcile_jobs_task():
+    from app.workers.execution import reconcile_jobs
+
+    async def run():
+        try:
+            return await reconcile_jobs()
+        finally:
+            await db.close_pool()
+    return asyncio.run(run())

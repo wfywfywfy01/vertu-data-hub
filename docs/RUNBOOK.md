@@ -43,6 +43,23 @@ Use a disposable database for schema and ingestion checks. Confirm extension,
 table count, source count, and sample retrieval results before calling a sync
 successful.
 
+## Processing recovery
+
+Run exactly one scheduler alongside the worker. Every minute it redelivers up
+to 100 pending jobs whose last dispatch is older than ten minutes. PostgreSQL
+session locks exclude live executions; a fenced run token prevents superseded
+workers from publishing chunks. Interrupted jobs exhaust their existing retry
+budget rather than retrying forever. Failed inputs remain stored for review.
+
+Check `/health/ingestion` as well as `/health/ready`. Ingestion health returns
+503 if no worker answers, the oldest pending job exceeds one hour, or its
+dependencies are unavailable. Large imports may be degraded while progressing;
+compare counts over time. Database readiness alone is not ETL health.
+
+PDF extraction uses PDFium text first and bounded OCR only on blank pages.
+The limit is 200 pages, 2000 pixels per OCR edge, and two million extracted
+characters. Split oversized documents at source; no automatic truncation.
+
 ## Metrics and backup
 
 - Scrape the loopback-only `/metrics` endpoint. Alert on readiness failure, HTTP 5xx, and sustained latency growth.

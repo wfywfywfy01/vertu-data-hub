@@ -151,6 +151,7 @@ CREATE TABLE IF NOT EXISTS processing_job (
 );
 CREATE INDEX IF NOT EXISTS idx_processing_job_queue
     ON processing_job (queue_name, status, created_at);
+ALTER TABLE processing_job ADD COLUMN IF NOT EXISTS run_token UUID;
 ALTER TABLE processing_job
     ADD COLUMN IF NOT EXISTS dispatch_status VARCHAR(20) NOT NULL DEFAULT 'pending';
 ALTER TABLE processing_job

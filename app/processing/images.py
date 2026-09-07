@@ -6,7 +6,8 @@ from functools import lru_cache
 from io import BytesIO
 
 
-MAX_IMAGE_PIXELS = 100_000_000
+MAX_IMAGE_PIXELS = 25_000_000
+MAX_OCR_EDGE = 2000
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,7 @@ class ImageExtraction:
     height: int
     image_format: str
     ocr_language: str
+    text_boxes: tuple[tuple[float, float, float, float], ...] | None = None
 
 
 def _ocr_language(language_code: str | None) -> str:
@@ -78,6 +80,8 @@ def extract_image(data: bytes, language_code: str | None = None) -> ImageExtract
     width, height = image.size
     language = _ocr_language(language_code)
     try:
+        image.thumbnail((MAX_OCR_EDGE, MAX_OCR_EDGE))
+        ocr_width, ocr_height = image.size
         output = _get_ocr_engine(language)(np.asarray(image))
     except Exception as exc:
         raise RuntimeError("OCR engine failed") from exc
@@ -91,6 +95,18 @@ def extract_image(data: bytes, language_code: str | None = None) -> ImageExtract
         if value:
             lines.append(value)
             scores.append(float(score))
+    boxes = None
+    detected = getattr(output, "boxes", None)
+    if detected is not None:
+        boxes = tuple(
+            (min(float(p[0]) for p in box) / ocr_width,
+             min(float(p[1]) for p in box) / ocr_height,
+             max(float(p[0]) for p in box) / ocr_width,
+             max(float(p[1]) for p in box) / ocr_height)
+            for box in detected
+        )
+    elif not lines:
+        boxes = ()
     return ImageExtraction(
         text="\n".join(lines),
         line_count=len(lines),
@@ -99,6 +115,7 @@ def extract_image(data: bytes, language_code: str | None = None) -> ImageExtract
         height=height,
         image_format=image_format,
         ocr_language=language,
+        text_boxes=boxes,
     )
 
 
