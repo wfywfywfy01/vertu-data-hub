@@ -46,7 +46,7 @@ def test_pdf_falls_back_to_pdfium_and_keeps_page_citations(tmp_path, monkeypatch
     monkeypatch.setattr(
         documents,
         "_extract_pdf_pages",
-        lambda _path: [(1, "First page"), (2, "Second page")],
+        lambda _path: ([(1, "First page"), (2, "Second page")], set()),
     )
 
     extracted = documents.extract_document(path)
@@ -76,7 +76,7 @@ def test_scanned_pdf_uses_ocr_and_keeps_page_citation(tmp_path, monkeypatch):
         "_convert_with_docling",
         lambda _path: (_ for _ in ()).throw(RuntimeError("docling unavailable")),
     )
-    monkeypatch.setattr(documents, "_extract_pdf_pages", lambda _path: [(1, "")])
+    monkeypatch.setattr(documents, "_extract_pdf_pages", lambda _path: ([(1, "")], {1}))
     monkeypatch.setattr(
         documents,
         "_extract_pdf_ocr_pages",
@@ -93,7 +93,7 @@ def test_mixed_pdf_only_ocrs_blank_pages_without_docling(tmp_path, monkeypatch):
     path = tmp_path / "mixed.pdf"
     path.write_bytes(b"fake")
     monkeypatch.setattr(documents, "_convert_with_docling", lambda _: pytest.fail("PDF must not load Docling"))
-    monkeypatch.setattr(documents, "_extract_pdf_pages", lambda _: [(1, "Cover"), (2, "  "), (3, "Appendix")])
+    monkeypatch.setattr(documents, "_extract_pdf_pages", lambda _: ([(1, "Cover"), (2, "  "), (3, "Appendix")], {2}))
     calls = []
     def ocr(path, language, pages):
         calls.append(pages)
@@ -114,3 +114,35 @@ def test_pdf_page_limit_checked_before_text_or_render(tmp_path):
         pdf.save(str(path))
     with pytest.raises(ValueError, match="200-page"):
         documents.extract_document(path)
+
+
+def test_scanned_body_with_digital_page_number_is_not_omitted(tmp_path, monkeypatch):
+    import ctypes
+    import pypdfium2 as pdfium
+    from PIL import Image
+    path = tmp_path / "scan-with-page-number.pdf"
+    with pdfium.PdfDocument.new() as pdf:
+        page = pdf.new_page(600, 800)
+        picture = pdfium.PdfImage.new(pdf)
+        with Image.new("RGB", (200, 200), "white") as image:
+            bitmap = pdfium.PdfBitmap.from_pil(image)
+            picture.set_bitmap(bitmap)
+            bitmap.close()
+        picture.set_matrix(pdfium.PdfMatrix(a=500, d=700, e=50, f=50))
+        page.insert_obj(picture)
+        raw_text = pdfium.raw.FPDFPageObj_NewTextObj(pdf, b"Helvetica", 12)
+        text = pdfium.PdfObject(raw_text, pdf=pdf)
+        number = ctypes.create_string_buffer("1\0".encode("utf-16-le"))
+        assert pdfium.raw.FPDFText_SetText(text, ctypes.cast(number, ctypes.POINTER(ctypes.c_ushort)))
+        text.set_matrix(pdfium.PdfMatrix(e=280, f=10))
+        page.insert_obj(text)
+        page.gen_content()
+        page.close()
+        pdf.save(str(path))
+    pages, required = documents._extract_pdf_pages(path)
+    assert pages[0][1].strip() == "1"
+    assert required == {1}
+    monkeypatch.setattr(documents, "_extract_pdf_ocr_pages", lambda _path, language, numbers: [(1, "Scanned contract body")])
+    result = documents.extract_document(path)
+    assert "Scanned contract body" in result.markdown
+    assert result.chunks[0].page_start == 1

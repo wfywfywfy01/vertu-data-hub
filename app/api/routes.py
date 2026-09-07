@@ -143,7 +143,7 @@ async def _content_context(
         None if claims.unrestricted else list(claims.dealer_ids),
         list(claims.team_keys),
     )
-    if not asset or asset["status"] not in allowed_statuses:
+    if not asset or asset["status"] == "deleted" or (asset_version_id is None and asset["status"] not in allowed_statuses):
         raise ApiError(404, "asset_not_found", "Asset was not found")
     row = await db.fetch_one(
         """
@@ -152,11 +152,14 @@ async def _content_context(
         FROM asset_version v
         JOIN source_object s ON s.id = v.source_object_id
         WHERE v.asset_id = %s
-          AND ((%s::uuid IS NULL AND v.is_current) OR v.id = %s::uuid)
-          AND (v.is_current OR EXISTS (
+          AND ((%s::uuid IS NULL AND v.is_current) OR (v.id = %s::uuid AND EXISTS (
               SELECT 1 FROM processing_job j WHERE j.asset_version_id = v.id
               AND j.status = 'succeeded' AND NOT coalesce((j.output_data->>'quarantined')::boolean, false)
-          ))
+              AND NOT coalesce((j.output_data->>'duplicate_content')::boolean, false)
+          ) AND NOT EXISTS (
+              SELECT 1 FROM processing_job j WHERE j.asset_version_id = v.id
+              AND coalesce((j.output_data->>'quarantined')::boolean, false)
+          )))
         """,
         (asset_id, asset_version_id, asset_version_id),
     )

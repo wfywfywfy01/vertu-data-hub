@@ -30,6 +30,9 @@ async def test_historical_preview_stays_pinned_and_scope_checked(document_record
     assert current["asset_version_id"] == second["version"]["id"]
     assert historical["asset_version_id"] == first["version"]["id"]
     assert historical["original_name"] == "policy.md"
+    from app import db
+    await db.execute("UPDATE knowledge_asset SET status = 'failed' WHERE id = %s", (first["asset"]["id"],))
+    assert (await _content_context(first["asset"]["id"], claims, asset_version_id=first["version"]["id"]))["version_number"] == 1
     with pytest.raises(ApiError):
         await _content_context(first["asset"]["id"], claims, asset_version_id=uuid.uuid4())
     outsider = ServiceClaims("outsider", "sales", "self", frozenset(), frozenset())

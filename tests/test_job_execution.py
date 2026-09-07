@@ -51,6 +51,27 @@ async def test_interruption_does_not_retry_forever(document_record):
         assert job["error_code"] == "worker_interrupted"
 
 
+async def test_retry_intent_survives_failure_before_broker_retry(document_record):
+    _, registered, source = document_record
+    job_id = registered["job"]["id"]
+    async with job_execution(job_id):
+        await assets.transition_job(job_id, "running")
+        await assets.transition_job(job_id, "failed", error_code="temporary_provider_error", retryable=True)
+    async with job_execution(job_id):
+        assert (await assets.get_job(job_id))["status"] == "queued"
+        assert (await process_document_job(job_id, storage=FakeStorage(source)))["status"] == "succeeded"
+
+
+async def test_reconciler_does_not_send_local_inbox_to_cloud_worker(document_record, monkeypatch):
+    from app import queue
+    _, registered, _ = document_record
+    await db.execute("UPDATE source_object SET bucket = 'local-inbox' WHERE id = %s", (registered["version"]["source_object_id"],))
+    sent = []
+    monkeypatch.setattr(queue, "enqueue_processing_job", lambda job_id, queue: sent.append(str(job_id)))
+    await reconcile_jobs()
+    assert str(registered["job"]["id"]) not in sent
+
+
 async def test_reconciliation_skips_live_execution_and_requeues_orphan(document_record, monkeypatch):
     from app import queue
     _, registered, _ = document_record

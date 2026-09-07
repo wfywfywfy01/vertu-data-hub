@@ -10,6 +10,17 @@
 - CI publishing depends on tests; incomplete overlay releases are retired.
 - Production remains unchanged until integrated tests, review, migration and
   deployment checks pass. No production completion is claimed here.
+- Independent review feedback resolved: preserve pre-recognition detection boxes,
+  atomically recover jobs, persist retry intent, exclude local jobs from cloud
+  reconciliation, OCR sparse scanned pages, and authorize pinned historical versions.
+- Local disposable PostgreSQL regression suite: 179 passed; dependency, compile
+  and Compose checks passed. Independent reviewer reproduced the fixes.
+- Isolated Linux Celery/Redis probe: SIGKILL during attempt 1 left one unacked
+  delivery and no chunks; reconciliation completed attempt 2 with one chunk.
+  Probe used an internal-only Docker network, synthetic input and a 1800 MiB cap.
+- Real OCR and preview probe on a synthetic 2000 x 600 image detected and masked
+  its email; OCR of the result no longer returned the email. Peak process RSS
+  was 704.2 MiB. This is not a worst-case memory guarantee for production files.
 
 ## 2026-08-25：4 GiB 云端多模态图片检索
 

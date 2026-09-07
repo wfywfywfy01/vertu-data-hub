@@ -48,7 +48,10 @@ successful.
 Run exactly one scheduler alongside the worker. Every minute it redelivers up
 to 100 pending jobs whose last dispatch is older than ten minutes. PostgreSQL
 session locks exclude live executions; a fenced run token prevents superseded
-workers from publishing chunks. Interrupted jobs exhaust their existing retry
+workers from publishing chunks. Recovery and token assignment commit atomically;
+transient failures persist their retry intent before broker redelivery. Local
+inbox jobs are excluded from cloud reconciliation and recover through local CLI.
+Interrupted jobs exhaust their existing retry
 budget rather than retrying forever. Failed inputs remain stored for review.
 
 Check `/health/ingestion` as well as `/health/ready`. Ingestion health returns
@@ -56,7 +59,9 @@ Check `/health/ingestion` as well as `/health/ready`. Ingestion health returns
 dependencies are unavailable. Large imports may be degraded while progressing;
 compare counts over time. Database readiness alone is not ETL health.
 
-PDF extraction uses PDFium text first and bounded OCR only on blank pages.
+PDF extraction uses PDFium text first and bounded OCR on blank pages or pages
+with fewer than 100 text characters and embedded images (for example, scanned
+contracts with a digital page number).
 The limit is 200 pages, 2000 pixels per OCR edge, and two million extracted
 characters. Split oversized documents at source; no automatic truncation.
 

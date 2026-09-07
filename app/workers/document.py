@@ -207,6 +207,7 @@ async def process_document_job(job_id, *, storage=None) -> dict:
         await assets.transition_job(
             job_id, "failed", error_code="document_processing_error",
             error_message=f"{type(exc).__name__}: {exc}"[:1000],
+            retryable=True,
         )
         return {"status": "failed", "retryable": True, "error_code": "document_processing_error"}
 
@@ -240,8 +241,6 @@ def process_asset_task(self, job_id: str):
             if result.get("retryable"):
                 job = await assets.get_job(job_id)
                 should_retry = bool(job and job["attempt_count"] < job["max_attempts"])
-                if should_retry:
-                    await assets.transition_job(job_id, "queued")
             return result, should_retry
         finally:
             await db.close_pool()

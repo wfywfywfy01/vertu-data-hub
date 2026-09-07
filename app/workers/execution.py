@@ -51,15 +51,31 @@ async def job_execution(job_id):
             yield False
             return
         token = uuid4()
-        await conn.execute("UPDATE processing_job SET run_token = %s WHERE id = %s", (token, job_id))
+        async with conn.transaction():
+            cur = await conn.execute("SELECT * FROM processing_job WHERE id = %s FOR UPDATE", (job_id,))
+            job = await cur.fetchone()
+            await conn.execute("UPDATE processing_job SET run_token = %s WHERE id = %s", (token, job_id))
+            if job and (job["status"] == "running" or (job["status"] == "failed" and job["retryable"])):
+                retry = job["attempt_count"] < job["max_attempts"]
+                status = "queued" if retry else "failed"
+                await conn.execute(
+                    """UPDATE processing_job SET status = %s, retryable = FALSE,
+                       progress = 0, updated_at = now(),
+                       finished_at = CASE WHEN %s THEN NULL ELSE now() END,
+                       error_code = CASE WHEN status = 'running' THEN 'worker_interrupted' ELSE error_code END,
+                       error_message = CASE WHEN status = 'running' THEN 'Previous execution lost its database lock' ELSE error_message END
+                       WHERE id = %s""", (status, retry, job_id),
+                )
+                await conn.execute(
+                    """UPDATE knowledge_asset a SET status = %s, updated_at = now()
+                       WHERE EXISTS (SELECT 1 FROM asset_version v WHERE v.asset_id = a.id
+                                     AND v.id = %s AND v.is_current)""",
+                    ("received" if retry else "failed", job["asset_version_id"]),
+                )
+                await assets._audit(conn, "system-worker", "processing.recovered", "processing_job", job["id"],
+                                    {"from": job["status"], "to": status, "attempt_count": job["attempt_count"]})
         state = _execution.set((job_id, token))
         try:
-            job = await assets.get_job(job_id)
-            if job and job["status"] == "running":
-                await assets.transition_job(job_id, "failed", error_code="worker_interrupted",
-                                            error_message="Previous execution lost its database lock")
-                if job["attempt_count"] < job["max_attempts"]:
-                    await assets.transition_job(job_id, "queued", progress=0)
             yield True
         finally:
             _execution.reset(state)
@@ -71,11 +87,15 @@ async def reconcile_jobs(limit=100):
     from app.knowledge import assets
     from app.queue import enqueue_processing_job
     rows = await db.fetch_all(
-        """SELECT id, queue_name FROM processing_job
-           WHERE status IN ('queued', 'running')
-             AND (dispatch_status <> 'sent' OR dispatched_at IS NULL
-                  OR dispatched_at < now() - interval '10 minutes')
-           ORDER BY dispatched_at NULLS FIRST, created_at LIMIT %s""", (limit,))
+        """SELECT j.id, j.queue_name FROM processing_job j
+           JOIN asset_version v ON v.id = j.asset_version_id
+           JOIN source_object s ON s.id = v.source_object_id
+           WHERE s.bucket <> 'local-inbox'
+             AND (j.status IN ('queued', 'running') OR
+                  (j.status = 'failed' AND j.retryable AND j.attempt_count < j.max_attempts))
+             AND (j.dispatch_status <> 'sent' OR j.dispatched_at IS NULL
+                  OR j.dispatched_at < now() - interval '10 minutes')
+           ORDER BY j.dispatched_at NULLS FIRST, j.created_at LIMIT %s""", (limit,))
     sent = 0
     async with await AsyncConnection.connect(settings.database_url, autocommit=True, row_factory=dict_row) as conn:
         for row in rows:

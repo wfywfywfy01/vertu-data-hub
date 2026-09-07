@@ -36,7 +36,7 @@ def _convert_with_docling(path: Path):
     return DocumentConverter().convert(str(path)).document
 
 
-def _extract_pdf_pages(path: Path) -> list[tuple[int, str]]:
+def _extract_pdf_pages(path: Path) -> tuple[list[tuple[int, str]], set[int]]:
     import pypdfium2 as pdfium
 
     document = pdfium.PdfDocument(str(path))
@@ -44,6 +44,7 @@ def _extract_pdf_pages(path: Path) -> list[tuple[int, str]]:
         if len(document) > MAX_PDF_PAGES:
             raise ValueError("PDF exceeds 200-page extraction limit")
         pages = []
+        ocr_pages = set()
         characters = 0
         for page_no, page in enumerate(document, start=1):
             text_page = page.get_textpage()
@@ -53,10 +54,15 @@ def _extract_pdf_pages(path: Path) -> list[tuple[int, str]]:
                 if characters > MAX_DOCUMENT_CHARACTERS:
                     raise ValueError("document exceeds text extraction limit")
                 pages.append((page_no, text))
+                if not text.strip() or (
+                    len(text.strip()) < 100
+                    and next(page.get_objects(filter=[pdfium.raw.FPDF_PAGEOBJ_IMAGE]), None) is not None
+                ):
+                    ocr_pages.add(page_no)
             finally:
                 text_page.close()
                 page.close()
-        return pages
+        return pages, ocr_pages
     finally:
         document.close()
 
@@ -108,11 +114,11 @@ def extract_document(path: Path, language_code: str | None = None) -> ExtractedD
         chunks = _chunks(markdown, None)
     elif suffix == ".pdf":
         try:
-            pages = _extract_pdf_pages(path)
-            blank_pages = {number for number, text in pages if not text.strip()}
-            if blank_pages:
-                ocr = dict(_extract_pdf_ocr_pages(path, language_code, blank_pages))
-                pages = [(number, ocr.get(number, text)) for number, text in pages]
+            pages, ocr_pages = _extract_pdf_pages(path)
+            if ocr_pages:
+                ocr = dict(_extract_pdf_ocr_pages(path, language_code, ocr_pages))
+                pages = [(number, "\n\n".join(part for part in (text, ocr.get(number, "")) if part.strip()))
+                         for number, text in pages]
         except ValueError:
             raise
         except Exception as exc:

@@ -500,6 +500,7 @@ async def transition_job(
     error_code: str | None = None,
     error_message: str | None = None,
     output_data: dict | None = None,
+    retryable: bool = False,
 ) -> dict:
     from app.workers.execution import check_job_owner
     if status not in TRANSITIONS:
@@ -522,7 +523,7 @@ async def transition_job(
                 UPDATE processing_job
                 SET status = %s, progress = %s,
                     attempt_count = attempt_count + CASE WHEN %s = 'running' THEN 1 ELSE 0 END,
-                    error_code = %s, error_message = %s,
+                    error_code = %s, error_message = %s, retryable = %s,
                     started_at = CASE WHEN %s = 'running' THEN coalesce(started_at, now()) ELSE started_at END,
                     finished_at = CASE WHEN %s IN ('succeeded','failed') THEN now() ELSE NULL END,
                     output_data = coalesce(%s::jsonb, output_data),
@@ -531,7 +532,8 @@ async def transition_job(
                 RETURNING *
                 """,
                 (
-                    status, next_progress, status, error_code, error_message, status, status,
+                    status, next_progress, status, error_code, error_message,
+                    status == "failed" and retryable, status, status,
                     Jsonb(output_data) if output_data is not None else None,
                     job_id,
                 ),

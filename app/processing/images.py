@@ -82,7 +82,10 @@ def extract_image(data: bytes, language_code: str | None = None) -> ImageExtract
     try:
         image.thumbnail((MAX_OCR_EDGE, MAX_OCR_EDGE))
         ocr_width, ocr_height = image.size
-        output = _get_ocr_engine(language)(np.asarray(image))
+        engine = _get_ocr_engine(language)
+        pixels = np.asarray(image)
+        detection = engine(pixels, use_det=True, use_cls=False, use_rec=False)
+        output = engine(pixels, use_det=True, use_cls=True, use_rec=True)
     except Exception as exc:
         raise RuntimeError("OCR engine failed") from exc
     finally:
@@ -96,7 +99,8 @@ def extract_image(data: bytes, language_code: str | None = None) -> ImageExtract
             lines.append(value)
             scores.append(float(score))
     boxes = None
-    detected = getattr(output, "boxes", None)
+    # Recognition confidence filtering must never remove a privacy mask.
+    detected = getattr(detection, "boxes", None)
     if detected is not None:
         boxes = tuple(
             (min(float(p[0]) for p in box) / ocr_width,
@@ -105,8 +109,6 @@ def extract_image(data: bytes, language_code: str | None = None) -> ImageExtract
              max(float(p[1]) for p in box) / ocr_height)
             for box in detected
         )
-    elif not lines:
-        boxes = ()
     return ImageExtraction(
         text="\n".join(lines),
         line_count=len(lines),

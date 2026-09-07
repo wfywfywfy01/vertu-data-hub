@@ -15,7 +15,7 @@ an uncommitted directory.
 - Deploy the exact `ghcr.io/wfywfywfy01/vertu-data-hub:<main-commit>` image published
   only after the `main` tests and container smoke test succeed. Overlay release
   workflows are retired: they did not include schema or dependency changes.
-- Apply the additive `processing_job.run_token` migration before deploying the
+- Apply the additive `processing_job.run_token` and `retryable` migrations before deploying the
   new API, worker, and scheduler together. Stop old workers before enabling the
   scheduler, because old workers do not participate in execution locking.
 - The worker runs one task at a time, with a 15-minute hard task limit, bounded

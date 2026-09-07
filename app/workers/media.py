@@ -248,5 +248,6 @@ async def process_media_job(job_id, *, storage=None) -> dict:
         await assets.transition_job(
             job_id, "failed", error_code="media_processing_error",
             error_message=f"{type(exc).__name__}: {exc}"[:1000],
+            retryable=True,
         )
         return {"status": "failed", "retryable": True, "error_code": "media_processing_error"}
