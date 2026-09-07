@@ -4,11 +4,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 import re
+from app.processing.sensitivity import _ASSIGNMENT_PATTERNS, _CARD_CANDIDATE, _luhn
 
 
 EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+(?![\w-])", re.UNICODE)
 PHONE_CANDIDATE = re.compile(r"(?<!\w)\+?\d(?:[\d\s().-]{5,}\d)(?!\w)", re.UNICODE)
 ISO_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$", re.UNICODE)
+PRIVATE_KEY = re.compile(
+    r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----.*?(?:-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\Z)",
+    re.DOTALL,
+)
 
 
 @dataclass(frozen=True)
@@ -19,6 +24,20 @@ class RedactionResult:
 
 def redact_text(text: str | None) -> RedactionResult:
     value = text or ""
+    value, sensitive_count = PRIVATE_KEY.subn("[REDACTED_PRIVATE_KEY]", value)
+    for name, pattern in _ASSIGNMENT_PATTERNS.items():
+        if name != "private_key":
+            value, count = pattern.subn(f"[REDACTED_{name.upper()}]", value)
+            sensitive_count += count
+
+    def mask_card(match):
+        nonlocal sensitive_count
+        if _luhn(match.group()):
+            sensitive_count += 1
+            return "[REDACTED_PAYMENT_CARD]"
+        return match.group()
+
+    value = _CARD_CANDIDATE.sub(mask_card, value)
     value, email_count = EMAIL.subn("[REDACTED_EMAIL]", value)
     phone_count = 0
 
@@ -39,4 +58,4 @@ def redact_text(text: str | None) -> RedactionResult:
         return "[REDACTED_PHONE]"
 
     value = PHONE_CANDIDATE.sub(mask_phone, value)
-    return RedactionResult(value, email_count + phone_count)
+    return RedactionResult(value, email_count + phone_count + sensitive_count)

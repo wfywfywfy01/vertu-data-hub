@@ -18,21 +18,15 @@ async def _resolve_dealer(dealer_id: str | None, dealer_name: str | None) -> dic
         rows = await dealers.list_dealers([value])
         if not rows:
             raise ValueError("dealer not found")
+        if rows[0]["status"] not in {"draft", "active"}:
+            raise ValueError("dealer is not active or draft")
         return rows[0]
 
-    matches = await dealers.search_dealers(dealer_name or "", limit=5)
-    normalized_name = dealers.normalize_name(dealer_name or "")
-    exact = [
-        row
-        for row in matches
-        if dealers.normalize_name(row["official_name"]) == normalized_name
-    ]
-    if len(exact) == 1:
-        return exact[0]
+    matches = await dealers.find_exact_dealers(dealer_name or "")
     if len(matches) == 1:
         return matches[0]
     if not matches:
-        raise ValueError("dealer not found")
+        raise ValueError("exact dealer name or active manual alias not found; use --dealer-id")
     names = ", ".join(row["official_name"] for row in matches[:3])
     raise ValueError(f"dealer name is ambiguous: {names}; use --dealer-id")
 
@@ -77,7 +71,7 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description="Import local dealer files")
     parser.add_argument("--path", required=True, help="file or folder to import")
     scope_group = parser.add_mutually_exclusive_group(required=True)
-    scope_group.add_argument("--dealer", help="exact dealer name")
+    scope_group.add_argument("--dealer", help="exact dealer name or active manual alias")
     scope_group.add_argument("--dealer-id", help="dealer UUID")
     scope_group.add_argument("--department", help="department key, such as overseas-sales")
     scope_group.add_argument("--company", action="store_true", help="company-wide Vertu scope")

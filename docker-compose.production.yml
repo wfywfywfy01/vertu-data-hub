@@ -30,9 +30,27 @@ services:
       TRANSFORMERS_OFFLINE: "1"
       DATA_HUB_IMAGE: ${DATA_HUB_IMAGE:?Set DATA_HUB_IMAGE to an image digest or commit tag}
       SERVICE_TOKEN_KEY_FILE: /run/secrets/dealer-knowledge-jwt.key
-    command: ["sh", "-c", "python -m app.cli.check_models && exec celery -A app.queue:celery_app worker -Q documents,images,videos --loglevel=INFO"]
+    command: ["sh", "-c", "python -m app.cli.check_models && exec celery -A app.queue:celery_app worker -Q documents,images,videos --loglevel=INFO --concurrency=1"]
+    mem_limit: 1800m
+    cpus: 2.0
+    pids_limit: 256
+    stop_grace_period: 16m
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.queue:celery_app inspect ping --destination celery@$$HOSTNAME --timeout 5"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 90s
     volumes:
       - dealer_knowledge_secrets:/run/secrets:ro
+
+  scheduler:
+    image: ${DATA_HUB_IMAGE:?Set DATA_HUB_IMAGE to an image digest or commit tag}
+    restart: unless-stopped
+    env_file: .env
+    command: ["celery", "-A", "app.queue:celery_app", "beat", "--schedule=/tmp/celerybeat-schedule", "--loglevel=INFO"]
+    mem_limit: 192m
+    pids_limit: 64
 
   backup:
     image: ${DATA_HUB_IMAGE:?Set DATA_HUB_IMAGE to an image digest or commit tag}

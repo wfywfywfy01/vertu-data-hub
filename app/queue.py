@@ -11,6 +11,21 @@ celery_app.conf.update(
     accept_content=["json"],
     broker_connection_retry_on_startup=True,
     imports=("app.workers.document",),
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    worker_prefetch_multiplier=1,
+    task_soft_time_limit=840,
+    task_time_limit=900,
+    worker_max_tasks_per_child=5,
+    worker_max_memory_per_child=900_000,
+    broker_transport_options={"visibility_timeout": 1200},
+    beat_schedule={
+        "recover-interrupted-jobs": {
+            "task": "dealer_knowledge.reconcile_jobs",
+            "schedule": 60.0,
+            "options": {"queue": "documents"},
+        },
+    },
 )
 
 

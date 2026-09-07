@@ -128,6 +128,29 @@ async def search_dealers(
     )
 
 
+async def find_exact_dealers(query: str) -> list[dict]:
+    normalized = normalize_name(_required(query, "dealer name", 240))
+    if not normalized:
+        raise ValueError("dealer name has no searchable characters")
+    return await db.fetch_all(
+        """
+        SELECT d.* FROM dealer d
+        WHERE d.status IN ('draft', 'active')
+          AND (
+              d.normalized_name = %s
+              OR EXISTS (
+                  SELECT 1 FROM dealer_alias a
+                  WHERE a.dealer_id = d.id AND a.active AND a.source = 'manual'
+                    AND a.normalized_alias = %s
+              )
+          )
+        ORDER BY d.id
+        LIMIT 2
+        """,
+        (normalized, normalized),
+    )
+
+
 async def confirm_dealer(
     dealer_id: UUID | str,
     *,

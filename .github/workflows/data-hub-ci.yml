@@ -58,6 +58,7 @@ jobs:
 
   image:
     name: Container build
+    needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

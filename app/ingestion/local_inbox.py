@@ -55,9 +55,19 @@ def _source_files(path: Path, managed_root: Path) -> list[Path]:
 
 
 async def _process_job(job: dict, storage: LocalStorage) -> dict:
+    from app.workers.execution import job_execution
+    async with job_execution(job["id"]) as acquired:
+        if not acquired:
+            return {"status": "already_running"}
+        return await _process_claimed_job(await assets.get_job(job["id"]), storage)
+
+
+async def _process_claimed_job(job: dict, storage: LocalStorage) -> dict:
     if job["status"] == "succeeded":
         return {"status": "unchanged"}
     if job["status"] == "failed":
+        if job["attempt_count"] >= job["max_attempts"]:
+            raise RuntimeError("processing attempts exhausted; administrator must review the failure")
         job = await assets.transition_job(job["id"], "queued")
     if job["status"] != "queued":
         raise RuntimeError(f"processing job is {job['status']}")

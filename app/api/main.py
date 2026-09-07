@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -68,8 +69,32 @@ async def live():
 
 @app.get("/health/ready")
 async def ready():
-    row = await db.fetch_one("SELECT 1 AS ready")
-    return {"status": "ok" if row and row["ready"] == 1 else "failed"}
+    try:
+        row = await asyncio.wait_for(db.fetch_one("SELECT 1 AS ready"), timeout=5)
+        ok = bool(row and row["ready"] == 1)
+    except Exception:
+        ok = False
+    return JSONResponse({"status": "ok" if ok else "failed"}, status_code=200 if ok else 503)
+
+
+@app.get("/health/ingestion")
+async def ingestion_health():
+    from app.queue import celery_app
+    try:
+        backlog = await asyncio.wait_for(db.fetch_one(
+            """SELECT count(*) FILTER (WHERE status = 'queued') AS queued,
+                      count(*) FILTER (WHERE status = 'running') AS running,
+                      count(*) FILTER (WHERE status = 'failed') AS failed,
+                      coalesce(extract(epoch FROM now() - min(created_at)
+                        FILTER (WHERE status IN ('queued', 'running'))), 0)::bigint AS oldest_pending_seconds
+               FROM processing_job"""), timeout=5)
+        workers = await asyncio.wait_for(asyncio.to_thread(
+            lambda: celery_app.control.inspect(timeout=3).ping()), timeout=5)
+        ok = bool(workers) and backlog["oldest_pending_seconds"] < 3600
+        return JSONResponse({"status": "ok" if ok else "degraded", "workers_online": bool(workers),
+                             **backlog}, status_code=200 if ok else 503)
+    except Exception:
+        return JSONResponse({"status": "unavailable"}, status_code=503)
 
 
 @app.get("/metrics", include_in_schema=False)

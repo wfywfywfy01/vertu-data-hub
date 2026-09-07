@@ -43,7 +43,38 @@ Use a disposable database for schema and ingestion checks. Confirm extension,
 table count, source count, and sample retrieval results before calling a sync
 successful.
 
+## Processing recovery
+
+Run exactly one scheduler alongside the worker. Every minute it redelivers up
+to 100 pending jobs whose last dispatch is older than ten minutes. PostgreSQL
+session locks exclude live executions; a fenced run token prevents superseded
+workers from publishing chunks. Recovery and token assignment commit atomically;
+transient failures persist their retry intent before broker redelivery. Local
+inbox jobs are excluded from cloud reconciliation and recover through local CLI.
+Interrupted jobs exhaust their existing retry
+budget rather than retrying forever. Failed inputs remain stored for review.
+
+Check `/health/ingestion` as well as `/health/ready`. Ingestion health returns
+503 if no worker answers, the oldest pending job exceeds one hour, or its
+dependencies are unavailable. Large imports may be degraded while progressing;
+compare counts over time. Database readiness alone is not ETL health.
+
+PDF extraction uses PDFium text first and bounded OCR on blank pages or pages
+with fewer than 100 text characters and embedded images (for example, scanned
+contracts with a digital page number).
+The limit is 200 pages, 2000 pixels per OCR edge, and two million extracted
+characters. Split oversized documents at source; no automatic truncation.
+
 ## Metrics and backup
+
+Existing image previews must be rebuilt before the new API can show them:
+`python -m app.cli.rebuild_previews --limit 10` reports a bounded dry run;
+add `--apply` to generate text-masked derivatives without external AI calls or
+replacing originals, embeddings, classifications or review decisions. Repeat
+batches until `selected=0`; investigate any nonzero `failed` count. Until a safe
+derivative exists the preview endpoint returns `409 safe_preview_pending`.
+Restricted images receive a neutral placeholder. Administrator original export
+continues to require reauthentication, reason, confirmation and audit.
 
 - Scrape the loopback-only `/metrics` endpoint. Alert on readiness failure, HTTP 5xx, and sustained latency growth.
 - Run `docker compose -f docker-compose.production.yml --profile ops run --rm backup` daily.

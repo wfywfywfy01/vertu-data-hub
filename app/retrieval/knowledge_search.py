@@ -197,16 +197,21 @@ async def search_knowledge(
         vector_hits = []
     else:
         literal = vector_literal(vector)
+        provider = settings.embedding_provider
+        model = settings.embedding_model if provider == "api" else "hash-ngram-v1"
         vector_hits = await db.fetch_all(
             f"""
             {BASE_SELECT},
                 1 - (c.embedding <=> %s::vector) AS semantic_similarity
             {BASE_FROM}
             WHERE {where}
+              AND c.embedding_provider = %s
+              AND c.embedding_model = %s
+              AND c.embedding_dimension = %s
             ORDER BY c.embedding <=> %s::vector
             LIMIT %s
             """,
-            [literal, *scope_params, literal, candidates],
+            [literal, *scope_params, provider, model, settings.embedding_dim, literal, candidates],
         )
         vector_hits = [
             row

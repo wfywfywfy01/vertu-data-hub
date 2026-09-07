@@ -33,9 +33,12 @@
 
 ### 预览与原件导出
 
-`GET /v1/assets/{asset_id}/content` 对所有角色重新执行资料范围授权。图片预览限制
-最长边 1280、移除 EXIF 并写入内部水印；其他资料只返回 `content_chunk` 中再次
-脱敏的文字，响应禁止缓存。原文件不通过该接口返回。
+`GET /v1/assets/{asset_id}/content` 对所有角色重新执行资料范围授权，可用
+`asset_version_id` 固定引用版本；该版本必须属于此资产且已成功处理，删除、隔离和
+未完成版本不开放预览。图片只读取 `safe-preview-v1` 脱敏派生图：遮盖 OCR 检测的
+文字区域、最长边 1280、移除 EXIF 并写入水印；无法可靠检测或命中高敏感保护时使用
+占位图。缺少派生图返回 `409 safe_preview_pending`，必须先回填，绝不回退原图。
+其他资料只返回 `content_chunk` 中再次脱敏的文字，响应禁止缓存。
 
 `POST /v1/exports` 仅允许 `admin`，服务令牌必须包含 5 分钟内的
 `reauth_at` 和 `reauth_purpose=knowledge-original-export`。请求必须包含
