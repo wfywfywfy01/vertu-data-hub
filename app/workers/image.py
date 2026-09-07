@@ -296,30 +296,7 @@ async def process_image_job(job_id, *, storage=None) -> dict:
             quality_score=quality_score,
             semantic_labels=semantic_labels,
         )
-        preview = await asyncio.to_thread(
-            image_preview, source, text_boxes=extracted.text_boxes,
-            restricted=bool(reasons),
-        )
-        preview_key = build_scoped_derived_key(
-            resolve_scope(dealer_id=context["dealer_id"], scope_type=context["scope_type"],
-                          scope_key=context["scope_key"]),
-            context["asset_version_id"], attempt_artifact_name("safe-preview-v1.jpg"),
-        )
-        await asyncio.to_thread(storage.put_object, preview_key, preview, content_type="image/jpeg")
-        pool = await db.get_pool()
-        async with pool.connection() as conn, conn.transaction():
-            await assert_job_owner(conn)
-            await conn.execute(
-            """INSERT INTO derived_artifact
-               (dealer_id, asset_version_id, artifact_type, bucket, object_key,
-                content_hash, content_type, byte_size, pipeline_version)
-               VALUES (%s, %s, 'safe_preview', %s, %s, %s, 'image/jpeg', %s, 'safe-preview-v1')
-               ON CONFLICT (asset_version_id, artifact_type, pipeline_version) DO UPDATE SET
-                 object_key = EXCLUDED.object_key, content_hash = EXCLUDED.content_hash,
-                 byte_size = EXCLUDED.byte_size, created_at = now()""",
-            (context["dealer_id"], context["asset_version_id"], context["bucket"], preview_key,
-             hashlib.sha256(preview).hexdigest(), len(preview)),
-            )
+        await save_safe_preview(context, source, extracted, storage, restricted=bool(reasons))
         output = {
             "ocr_line_count": extracted.line_count,
             "artifact_key": artifact_key,
@@ -343,3 +320,29 @@ async def process_image_job(job_id, *, storage=None) -> dict:
             error_message=f"{type(exc).__name__}: {exc}"[:1000],
         )
         return {"status": "failed", "retryable": True, "error_code": "image_processing_error"}
+
+
+async def save_safe_preview(context, source, extracted, storage, *, restricted):
+    preview = await asyncio.to_thread(
+        image_preview, source, text_boxes=extracted.text_boxes, restricted=restricted,
+    )
+    preview_key = build_scoped_derived_key(
+        resolve_scope(dealer_id=context["dealer_id"], scope_type=context["scope_type"],
+                      scope_key=context["scope_key"]),
+        context["asset_version_id"], attempt_artifact_name("safe-preview-v1.jpg"),
+    )
+    await asyncio.to_thread(storage.put_object, preview_key, preview, content_type="image/jpeg")
+    pool = await db.get_pool()
+    async with pool.connection() as conn, conn.transaction():
+        await assert_job_owner(conn)
+        await conn.execute(
+            """INSERT INTO derived_artifact
+               (dealer_id, asset_version_id, artifact_type, bucket, object_key,
+                content_hash, content_type, byte_size, pipeline_version)
+               VALUES (%s, %s, 'safe_preview', %s, %s, %s, 'image/jpeg', %s, 'safe-preview-v1')
+               ON CONFLICT (asset_version_id, artifact_type, pipeline_version) DO UPDATE SET
+                 object_key = EXCLUDED.object_key, content_hash = EXCLUDED.content_hash,
+                 byte_size = EXCLUDED.byte_size, created_at = now()""",
+            (context["dealer_id"], context["asset_version_id"], context["bucket"], preview_key,
+             hashlib.sha256(preview).hexdigest(), len(preview)),
+        )

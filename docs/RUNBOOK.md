@@ -62,6 +62,15 @@ characters. Split oversized documents at source; no automatic truncation.
 
 ## Metrics and backup
 
+Existing image previews must be rebuilt before the new API can show them:
+`python -m app.cli.rebuild_previews --limit 10` reports a bounded dry run;
+add `--apply` to generate text-masked derivatives without external AI calls or
+replacing originals, embeddings, classifications or review decisions. Repeat
+batches until `selected=0`; investigate any nonzero `failed` count. Until a safe
+derivative exists the preview endpoint returns `409 safe_preview_pending`.
+Restricted images receive a neutral placeholder. Administrator original export
+continues to require reauthentication, reason, confirmation and audit.
+
 - Scrape the loopback-only `/metrics` endpoint. Alert on readiness failure, HTTP 5xx, and sustained latency growth.
 - Run `docker compose -f docker-compose.production.yml --profile ops run --rm backup` daily.
 - Backups are custom-format PostgreSQL archives, written atomically, checked with `pg_restore --list`, permissioned `0600`, and retained for 14 runs by default.
