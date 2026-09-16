@@ -11,6 +11,9 @@ def test_fallback_terms_extract_names_and_chinese_bigrams():
     assert {"safiran", "hamrah", "库存", "录入", "更新", "哪天"} <= set(terms)
     assert len(terms) == len(set(terms))
 
+    restaurant_terms = knowledge_search._fallback_terms("查一下俄罗斯代理24年过来吃了哪些餐厅")
+    assert {"俄罗", "罗斯", "餐厅", "来访", "接待"} <= set(restaurant_terms)
+
 
 async def test_query_is_redacted_before_embedding(monkeypatch):
     embedded = []
@@ -87,6 +90,7 @@ async def test_embedding_failure_falls_back_to_lexical_search(monkeypatch):
 
     assert len(queries) == 1
     assert "ts_rank_cd" in queries[0]
+    assert "s.original_name" in queries[0]
     assert results[0]["text"] == "当前库存为 12 台。"
     assert results[0]["semantic_similarity"] is None
 
@@ -122,6 +126,41 @@ def test_rrf_rewards_chunk_found_by_both_retrievers():
     assert results[0]["text"] == "shared"
     assert results[0]["semantic_similarity"] == 0.8
     assert results[0]["lexical_score"] == 0.5
+
+
+def test_rrf_prefers_explicit_metadata_match_on_tie():
+    common = {
+        "dealer_id": uuid.uuid4(),
+        "asset_version_id": uuid.uuid4(),
+        "asset_id": uuid.uuid4(),
+        "text": "text",
+        "section": None,
+        "page_start": 1,
+        "page_end": 1,
+        "citation": {},
+        "version_number": 1,
+        "category": "communications",
+        "sensitivity": "internal",
+    }
+    vector_only = {
+        **common,
+        "chunk_id": uuid.uuid4(),
+        "title": "会议纪要",
+        "original_name": "meeting.pdf",
+        "semantic_similarity": 0.9,
+    }
+    metadata_match = {
+        **common,
+        "chunk_id": uuid.uuid4(),
+        "title": "俄罗斯来访餐厅",
+        "original_name": "俄罗斯来访餐厅.xlsx",
+        "lexical_score": 0.5,
+        "metadata_matches": 3,
+    }
+
+    results = knowledge_search._fuse([vector_only], [metadata_match], 1)
+
+    assert results[0]["citation"]["original_name"] == "俄罗斯来访餐厅.xlsx"
 
 
 async def test_low_similarity_vector_hit_is_not_returned(monkeypatch):

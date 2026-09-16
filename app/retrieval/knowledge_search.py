@@ -23,6 +23,12 @@ logger = logging.getLogger(__name__)
 
 ASCII_TERM_RE = re.compile(r"[A-Za-z0-9]{2,}")
 CJK_RUN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
+RESTAURANT_INTENT_MARKERS = ("餐厅", "餐馆", "饭店", "用餐", "吃饭", "吃了", "晚餐", "午餐", "早餐")
+RESTAURANT_RECALL_TERMS = ("餐厅", "饭店", "来访", "接待")
+
+
+SEARCH_METADATA = "concat_ws(' ', nullif(a.title, ''), nullif(s.original_name, ''), nullif(c.section, ''))"
+SEARCH_TEXT = f"concat_ws(' ', {SEARCH_METADATA}, c.text)"
 
 
 BASE_SELECT = """
@@ -60,6 +66,8 @@ def _fallback_terms(query: str) -> list[str]:
             terms.append(run)
         elif len(run) > 2:
             terms.extend(run[index : index + 2] for index in range(len(run) - 1))
+    if any(marker in query for marker in RESTAURANT_INTENT_MARKERS):
+        terms.extend(RESTAURANT_RECALL_TERMS)
     return list(dict.fromkeys(terms))[:MAX_FALLBACK_TERMS]
 
 
@@ -99,9 +107,14 @@ def _fuse(vector_hits: list[dict], text_hits: list[dict], top_k: int) -> list[di
                 item["semantic_similarity"] = float(row["semantic_similarity"])
             else:
                 item["lexical_score"] = float(row["lexical_score"])
+                item["metadata_matches"] = int(row.get("metadata_matches") or 0)
 
     results = []
-    for item in sorted(combined.values(), key=lambda row: row["score"], reverse=True)[:top_k]:
+    for item in sorted(
+        combined.values(),
+        key=lambda row: (row["score"], int(row.get("metadata_matches") or 0)),
+        reverse=True,
+    )[:top_k]:
         scope_type = item.get("scope_type", "dealer")
         scope_key = item.get("scope_key") or str(item["dealer_id"])
         safe_text = redact_text(item["text"]).text
@@ -223,12 +236,12 @@ async def search_knowledge(
         f"""
         {BASE_SELECT},
             ts_rank_cd(
-                to_tsvector('simple', c.text),
+                to_tsvector('simple', {SEARCH_TEXT}),
                 websearch_to_tsquery('simple', %s)
             ) AS lexical_score
         {BASE_FROM}
         WHERE {where}
-          AND to_tsvector('simple', c.text) @@ websearch_to_tsquery('simple', %s)
+          AND to_tsvector('simple', {SEARCH_TEXT}) @@ websearch_to_tsquery('simple', %s)
         ORDER BY lexical_score DESC, c.id
         LIMIT %s
         """,
@@ -242,16 +255,22 @@ async def search_knowledge(
             text_hits = await db.fetch_all(
                 f"""
                 {BASE_SELECT},
-                    matched.matched_terms::real / %s AS lexical_score
+                    (matched.content_matches + matched.metadata_matches * 2)::real / %s AS lexical_score,
+                    matched.metadata_matches
                 {BASE_FROM}
                 CROSS JOIN LATERAL (
-                    SELECT count(*) AS matched_terms
+                    SELECT
+                        count(*) FILTER (
+                            WHERE strpos(lower(c.text), query_term.term) > 0
+                        ) AS content_matches,
+                        count(*) FILTER (
+                            WHERE strpos(lower({SEARCH_METADATA}), query_term.term) > 0
+                        ) AS metadata_matches
                     FROM unnest(%s::text[]) AS query_term(term)
-                    WHERE strpos(lower(c.text), query_term.term) > 0
                 ) matched
                 WHERE {where}
-                  AND matched.matched_terms >= %s
-                ORDER BY lexical_score DESC, c.id
+                  AND matched.content_matches + matched.metadata_matches >= %s
+                ORDER BY matched.metadata_matches DESC, matched.content_matches DESC, lexical_score DESC, c.id
                 LIMIT %s
                 """,
                 [
