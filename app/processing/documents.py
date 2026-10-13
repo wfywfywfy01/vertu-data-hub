@@ -2,18 +2,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from io import BytesIO
+import json
 from pathlib import Path
 import math
 
 from app.chunking import chunk_markdown
 
 
-PLAIN_SUFFIXES = {".md", ".txt", ".csv"}
-DOCLING_SUFFIXES = {".docx", ".pptx", ".xlsx"}
+PLAIN_SUFFIXES = {".md", ".txt", ".csv", ".py"}
+DOCLING_SUFFIXES = {".docx", ".pptx", ".xlsx", ".xlsm"}
 MAX_PDF_PAGES = 200
 MAX_OCR_EDGE = 2000
 MAX_DOCUMENT_CHARACTERS = 2_000_000
+TRUNCATION_MARKER = "[索引文本已截断，原件完整保留。]"
+EMPTY_TEXT_MARKER = "[空白文本文件，原件完整保留。]"
+MAX_PLAIN_BLOCK_CHARACTERS = 300
 
 
 @dataclass(frozen=True)
@@ -28,6 +33,100 @@ class CitedChunk:
 class ExtractedDocument:
     markdown: str
     chunks: list[CitedChunk]
+
+
+class _HTMLTextParser(HTMLParser):
+    _BLOCKS = {
+        "address", "article", "aside", "blockquote", "br", "caption", "dd",
+        "div", "dl", "dt", "figcaption", "figure", "footer", "h1", "h2",
+        "h3", "h4", "h5", "h6", "header", "li", "main", "nav", "ol",
+        "p", "pre", "section", "table", "td", "th", "tr", "ul",
+    }
+    _IGNORED = {"script", "style", "noscript", "template"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.ignored_depth = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        del attrs
+        tag = tag.lower()
+        if tag in self._IGNORED:
+            self.ignored_depth += 1
+        elif not self.ignored_depth and tag in self._BLOCKS:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag in self._IGNORED and self.ignored_depth:
+            self.ignored_depth -= 1
+        elif not self.ignored_depth and tag in self._BLOCKS:
+            self.parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if not self.ignored_depth:
+            self.parts.append(data)
+
+    def markdown(self) -> str:
+        lines = (" ".join(line.split()) for line in "".join(self.parts).splitlines())
+        return "\n\n".join(line for line in lines if line)
+
+
+def _extract_html(path: Path) -> str:
+    parser = _HTMLTextParser()
+    parser.feed(path.read_text(encoding="utf-8-sig"))
+    parser.close()
+    return parser.markdown()
+
+
+def _extract_plain_text(path: Path) -> str:
+    with path.open(encoding="utf-8-sig") as stream:
+        text = stream.read(MAX_DOCUMENT_CHARACTERS + 1)
+    if len(text) > MAX_DOCUMENT_CHARACTERS:
+        available = MAX_DOCUMENT_CHARACTERS - len(TRUNCATION_MARKER) - 2
+        text = f"{text[:available]}\n\n{TRUNCATION_MARKER}"
+    return text if text.strip() else EMPTY_TEXT_MARKER
+
+
+def _chunkable_text(text: str) -> str:
+    blocks = []
+    for line in text.splitlines():
+        blocks.extend(
+            line[offset:offset + MAX_PLAIN_BLOCK_CHARACTERS]
+            for offset in range(0, len(line), MAX_PLAIN_BLOCK_CHARACTERS)
+        )
+    return "\n\n".join(blocks) if blocks else text
+
+
+def _extract_json(path: Path) -> str:
+    with path.open(encoding="utf-8-sig") as stream:
+        value = json.load(stream)
+    pending = [("$", value)]
+    parts: list[str] = []
+    characters = 0
+    available = MAX_DOCUMENT_CHARACTERS - len(TRUNCATION_MARKER) - 2
+    while pending:
+        key, item = pending.pop()
+        if isinstance(item, dict):
+            pending.extend(
+                (f"{key}.{name}", child)
+                for name, child in reversed(list(item.items()))
+            )
+            continue
+        if isinstance(item, list):
+            pending.extend(
+                (f"{key}[{index}]", child)
+                for index, child in reversed(list(enumerate(item)))
+            )
+            continue
+        line = f"{key}: {json.dumps(item, ensure_ascii=False)}"
+        if characters + len(line) > available:
+            parts.append(TRUNCATION_MARKER)
+            break
+        parts.append(line)
+        characters += len(line) + 2
+    return "\n\n".join(parts) if parts else EMPTY_TEXT_MARKER
 
 
 def _convert_with_docling(path: Path):
@@ -101,16 +200,27 @@ def _extract_pdf_ocr_pages(
 def _chunks(markdown: str, page_no: int | None) -> list[CitedChunk]:
     return [
         CitedChunk(chunk.text, chunk.section, page_no, page_no)
-        for chunk in chunk_markdown(markdown)
+        for chunk in chunk_markdown(_chunkable_text(markdown))
     ]
 
 
 def extract_document(path: Path, language_code: str | None = None) -> ExtractedDocument:
     suffix = path.suffix.lower()
-    if suffix in PLAIN_SUFFIXES:
+    if suffix == ".html":
         if path.stat().st_size > MAX_DOCUMENT_CHARACTERS * 4:
             raise ValueError("document exceeds text extraction limit")
-        markdown = path.read_text(encoding="utf-8-sig")
+        markdown = _extract_html(path)
+        chunks = _chunks(markdown, None)
+    elif suffix == ".json":
+        if path.stat().st_size > MAX_DOCUMENT_CHARACTERS * 4:
+            raise ValueError("document exceeds text extraction limit")
+        try:
+            markdown = _extract_json(path)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ValueError("JSON parsing failed") from exc
+        chunks = _chunks(markdown, None)
+    elif suffix in PLAIN_SUFFIXES:
+        markdown = _extract_plain_text(path)
         chunks = _chunks(markdown, None)
     elif suffix == ".pdf":
         try:

@@ -24,7 +24,11 @@ SUPPORTED_EXTENSIONS = DOCUMENT_EXTENSIONS | IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
 CONTENT_TYPES = {
     ".csv": "text/csv",
     ".heic": "image/heic",
+    ".html": "text/html",
+    ".json": "application/json",
     ".md": "text/markdown",
+    ".py": "text/x-python",
+    ".xlsm": "application/vnd.ms-excel.sheet.macroenabled.12",
 }
 
 
