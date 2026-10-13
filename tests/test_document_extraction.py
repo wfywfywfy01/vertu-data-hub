@@ -3,6 +3,8 @@ from pathlib import Path
 import pytest
 
 from app.processing import documents
+from app.storage import validate_upload
+from app.chunking import estimate_tokens
 
 
 def test_csv_is_extracted_as_plain_text(tmp_path):
@@ -13,6 +15,105 @@ def test_csv_is_extracted_as_plain_text(tmp_path):
 
     assert "V01" in extracted.markdown
     assert extracted.chunks[0].page_start is None
+
+
+@pytest.mark.parametrize(
+    ("name", "content_type"),
+    [
+        ("report.html", "text/html"),
+        ("evidence.json", "application/json"),
+        ("analysis.py", "text/x-python"),
+        ("model.xlsm", "application/vnd.ms-excel.sheet.macroenabled.12"),
+    ],
+)
+def test_archive_document_formats_are_accepted(name, content_type):
+    assert validate_upload(name, content_type, 10, "a" * 64) == Path(name).suffix
+
+
+def test_html_extracts_visible_utf8_text_without_scripts(tmp_path):
+    path = tmp_path / "report.html"
+    path.write_text(
+        '<meta charset="utf-8"><style>secret-css</style>'
+        '<h1>俄罗斯计划</h1><p>reStore 会议证据</p><script>secret-js</script>',
+        encoding="utf-8",
+    )
+
+    extracted = documents.extract_document(path)
+
+    assert "俄罗斯计划" in extracted.markdown
+    assert "reStore 会议证据" in extracted.markdown
+    assert "secret-css" not in extracted.markdown
+    assert "secret-js" not in extracted.markdown
+
+
+def test_json_flattens_values_into_searchable_chunks(tmp_path):
+    path = tmp_path / "evidence.json"
+    path.write_text('{"dealer":{"name":"reStore","stores":85}}', encoding="utf-8")
+
+    extracted = documents.extract_document(path)
+
+    assert '$.dealer.name: "reStore"' in extracted.markdown
+    assert "$.dealer.stores: 85" in extracted.markdown
+
+
+def test_python_source_is_extracted_as_plain_text(tmp_path):
+    path = tmp_path / "analysis.py"
+    path.write_text('DEALER = "reStore"\n', encoding="utf-8")
+
+    assert "reStore" in documents.extract_document(path).markdown
+
+
+def test_large_plain_text_is_bounded_and_original_remains_external(tmp_path):
+    path = tmp_path / "large.csv"
+    path.write_text("x" * (documents.MAX_DOCUMENT_CHARACTERS + 10), encoding="utf-8")
+
+    extracted = documents.extract_document(path)
+
+    assert len(extracted.markdown) == documents.MAX_DOCUMENT_CHARACTERS
+    assert extracted.markdown.endswith(documents.TRUNCATION_MARKER)
+    assert max(estimate_tokens(chunk.text) for chunk in extracted.chunks) <= 700
+
+
+def test_empty_text_file_gets_truthful_search_marker(tmp_path):
+    path = tmp_path / "empty.txt"
+    path.write_text("\n", encoding="utf-8")
+
+    extracted = documents.extract_document(path)
+
+    assert extracted.markdown == documents.EMPTY_TEXT_MARKER
+
+
+def test_xlsm_uses_document_converter_without_running_macros(tmp_path, monkeypatch):
+    path = tmp_path / "model.xlsm"
+    path.write_bytes(b"fake")
+
+    class FakeDocument:
+        pages = {}
+
+        def export_to_markdown(self, page_no=None):
+            assert page_no is None
+            return "reStore financial model"
+
+    monkeypatch.setattr(documents, "_convert_with_docling", lambda _path: FakeDocument())
+
+    assert "financial model" in documents.extract_document(path).markdown
+
+
+def test_large_spreadsheet_table_is_split_for_embedding(tmp_path, monkeypatch):
+    path = tmp_path / "model.xlsm"
+    path.write_bytes(b"fake")
+
+    class FakeDocument:
+        pages = {}
+
+        def export_to_markdown(self, page_no=None):
+            return "\n".join(f"| row {index} | " + "value " * 200 for index in range(20))
+
+    monkeypatch.setattr(documents, "_convert_with_docling", lambda _path: FakeDocument())
+
+    extracted = documents.extract_document(path)
+
+    assert max(estimate_tokens(chunk.text) for chunk in extracted.chunks) <= 700
 
 
 def test_docling_pages_keep_page_citations(tmp_path, monkeypatch):

@@ -14,7 +14,10 @@ from app.config import settings
 from app.knowledge.scopes import KnowledgeScope, resolve_scope
 
 
-DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".csv", ".txt", ".md"}
+DOCUMENT_EXTENSIONS = {
+    ".pdf", ".docx", ".pptx", ".xlsx", ".xlsm", ".html",
+    ".csv", ".json", ".py", ".txt", ".md",
+}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".heic"}
 VIDEO_EXTENSIONS = {".mp4", ".mov"}
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".wav"}
