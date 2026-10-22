@@ -140,7 +140,7 @@ async def _content_context(
 ) -> dict:
     asset = await assets.get_asset(
         asset_id,
-        None if claims.unrestricted else list(claims.dealer_ids),
+        None if claims.read_unrestricted else list(claims.dealer_ids),
         list(claims.team_keys),
     )
     if not asset or asset["status"] == "deleted" or (asset_version_id is None and asset["status"] not in allowed_statuses):
@@ -206,7 +206,7 @@ async def get_dealers(
     q: str | None = None,
     claims: ServiceClaims = Depends(require_service_claims),
 ):
-    scoped_ids = None if claims.unrestricted else list(claims.dealer_ids)
+    scoped_ids = None if claims.read_unrestricted else list(claims.dealer_ids)
     try:
         return await dealers.search_dealers(q, dealer_ids=scoped_ids) if q else await dealers.list_dealers(
             scoped_ids
@@ -341,9 +341,9 @@ async def get_assets(
     claims: ServiceClaims = Depends(require_service_claims),
 ):
     if dealer_id:
-        claims.require_dealer(dealer_id)
+        claims.require_read_dealer(dealer_id)
     return await assets.list_assets(
-        None if claims.unrestricted else list(claims.dealer_ids),
+        None if claims.read_unrestricted else list(claims.dealer_ids),
         team_keys=list(claims.team_keys),
         dealer_id=dealer_id,
     )
@@ -353,7 +353,7 @@ async def get_assets(
 async def get_asset(asset_id: UUID, claims: ServiceClaims = Depends(require_service_claims)):
     row = await assets.get_asset(
         asset_id,
-        None if claims.unrestricted else list(claims.dealer_ids),
+        None if claims.read_unrestricted else list(claims.dealer_ids),
         list(claims.team_keys),
     )
     if not row:
@@ -587,7 +587,7 @@ async def download_original_export(
 async def get_job(job_id: UUID, claims: ServiceClaims = Depends(require_service_claims)):
     row = await assets.get_job(
         job_id,
-        None if claims.unrestricted else list(claims.dealer_ids),
+        None if claims.read_unrestricted else list(claims.dealer_ids),
         list(claims.team_keys),
     )
     if not row:
@@ -651,13 +651,13 @@ async def search(
     claims: ServiceClaims = Depends(require_service_claims),
 ):
     if body.dealer_id:
-        claims.require_dealer(body.dealer_id)
+        claims.require_read_dealer(body.dealer_id)
     if body.category and body.category not in assets.CATEGORIES:
         raise ApiError(422, "invalid_search", "Unsupported asset category")
     try:
         rows = await search_assets(
             body.query,
-            dealer_ids=None if claims.unrestricted else list(claims.dealer_ids),
+            dealer_ids=None if claims.read_unrestricted else list(claims.dealer_ids),
             team_keys=list(claims.team_keys),
             actor_id=claims.user_id,
             request_id=request.state.request_id,
@@ -679,13 +679,13 @@ async def answer(
     claims: ServiceClaims = Depends(require_service_claims),
 ):
     if body.dealer_id:
-        claims.require_dealer(body.dealer_id)
+        claims.require_read_dealer(body.dealer_id)
     if body.category and body.category not in assets.CATEGORIES:
         raise ApiError(422, "invalid_answer", "Unsupported asset category")
     try:
         return await answer_question(
             body.query,
-            dealer_ids=None if claims.unrestricted else list(claims.dealer_ids),
+            dealer_ids=None if claims.read_unrestricted else list(claims.dealer_ids),
             team_keys=list(claims.team_keys),
             actor_id=claims.user_id,
             request_id=request.state.request_id,

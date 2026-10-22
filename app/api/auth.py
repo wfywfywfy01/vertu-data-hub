@@ -14,6 +14,10 @@ from app.config import settings
 from app.knowledge.scopes import KnowledgeScope, normalize_scope_key
 
 
+KNOWLEDGE_READ_ALL = "knowledge:read:all"
+_ALLOWED_CAPABILITIES = {KNOWLEDGE_READ_ALL}
+
+
 @dataclass(frozen=True)
 class ServiceClaims:
     user_id: str
@@ -21,6 +25,7 @@ class ServiceClaims:
     scope: str
     dealer_ids: frozenset[UUID]
     team_keys: frozenset[str]
+    capabilities: frozenset[str] = frozenset()
     reauthenticated_at: datetime | None = None
     reauthentication_purpose: str | None = None
 
@@ -28,8 +33,16 @@ class ServiceClaims:
     def unrestricted(self) -> bool:
         return self.role == "admin" and self.scope == "all"
 
+    @property
+    def read_unrestricted(self) -> bool:
+        return self.unrestricted or KNOWLEDGE_READ_ALL in self.capabilities
+
     def require_dealer(self, dealer_id: UUID) -> None:
         if not self.unrestricted and dealer_id not in self.dealer_ids:
+            raise ApiError(403, "dealer_scope_denied", "Dealer is outside the caller scope")
+
+    def require_read_dealer(self, dealer_id: UUID) -> None:
+        if not self.read_unrestricted and dealer_id not in self.dealer_ids:
             raise ApiError(403, "dealer_scope_denied", "Dealer is outside the caller scope")
 
     def require_knowledge_scope(self, knowledge_scope: KnowledgeScope) -> None:
@@ -100,6 +113,16 @@ async def require_service_claims(authorization: str = Header(default="")) -> Ser
         if not isinstance(raw_team_keys, list):
             raise ValueError("team_keys must be a list")
         team_keys = frozenset(normalize_scope_key(value) for value in raw_team_keys)
+        raw_capabilities = payload.get("capabilities", [])
+        if not isinstance(raw_capabilities, list):
+            raise ValueError("capabilities must be a list")
+        capabilities = frozenset(str(value) for value in raw_capabilities)
+        if not capabilities <= _ALLOWED_CAPABILITIES:
+            raise ValueError("unknown capability")
+        if KNOWLEDGE_READ_ALL in capabilities and (
+            role != "viewer" or scope != "none" or dealer_ids or team_keys
+        ):
+            raise ValueError("knowledge read-all requires an isolated viewer")
         reauthenticated_at = None
         reauthentication_purpose = None
         if "reauth_at" in payload:
@@ -113,6 +136,7 @@ async def require_service_claims(authorization: str = Header(default="")) -> Ser
         scope=scope,
         dealer_ids=dealer_ids,
         team_keys=team_keys,
+        capabilities=capabilities,
         reauthenticated_at=reauthenticated_at,
         reauthentication_purpose=reauthentication_purpose,
     )

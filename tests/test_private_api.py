@@ -21,6 +21,7 @@ def _token(
     *,
     dealer_ids=(),
     team_keys=(),
+    capabilities=(),
     role="sales",
     scope="self",
     expires_in=300,
@@ -40,6 +41,7 @@ def _token(
             "scope": scope,
             "dealer_ids": [str(value) for value in dealer_ids],
             "team_keys": list(team_keys),
+            "capabilities": list(capabilities),
             "iat": now,
             "exp": now + timedelta(seconds=expires_in),
             "jti": str(uuid.uuid4()),
@@ -443,6 +445,69 @@ async def test_expired_service_token_is_rejected(client):
     response = await client.get(
         "/v1/dealers",
         headers={"Authorization": f"Bearer {_token(expires_in=-1)}"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["code"] == "invalid_service_token"
+
+
+async def test_read_all_capability_is_global_read_only(client, api_dealer):
+    token = _token(
+        role="viewer",
+        scope="none",
+        capabilities=["knowledge:read:all"],
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+
+    listed = await client.get("/v1/dealers", headers=headers)
+    upload = await client.post(
+        "/v1/uploads/presign",
+        headers=headers,
+        json={
+            "dealer_id": str(api_dealer["id"]),
+            "filename": "blocked.pdf",
+            "content_type": "application/pdf",
+            "byte_size": 10,
+            "content_hash": "a" * 64,
+        },
+    )
+    proposed = await client.post(
+        "/v1/dealers",
+        headers=headers,
+        json={
+            "official_name": "Blocked proposal",
+            "country_code": "GB",
+        },
+    )
+    reviews = await client.get("/v1/reviews", headers=headers)
+    exported = await client.post(
+        "/v1/exports",
+        headers={**headers, "Idempotency-Key": f"pytest-{uuid.uuid4()}"},
+        json={
+            "asset_id": str(uuid.uuid4()),
+            "reason": "read only account must not export originals",
+            "confirmation": "export-original",
+        },
+    )
+
+    assert listed.status_code == 200, listed.text
+    assert str(api_dealer["id"]) in {row["id"] for row in listed.json()}
+    assert upload.status_code == 403
+    assert upload.json()["code"] == "role_denied"
+    assert proposed.status_code == 403
+    assert proposed.json()["code"] == "role_denied"
+    assert reviews.status_code == 403
+    assert reviews.json()["code"] == "role_denied"
+    assert exported.status_code == 403
+    assert exported.json()["code"] == "role_denied"
+
+
+async def test_read_all_capability_rejects_non_isolated_role(client):
+    response = await client.get(
+        "/v1/dealers",
+        headers={
+            "Authorization": f"Bearer {_token(role='sales', capabilities=['knowledge:read:all'])}"
+        },
     )
 
     assert response.status_code == 401

@@ -3,7 +3,7 @@
 ## 调用规则
 
 - 基础路径：`/v1`；仅允许 PDCA 后端和运维服务通过私网访问。
-- PDCA 服务令牌必须包含：`iss`、`aud`、`sub`、`user_id`、`role`、`scope`、`dealer_ids`、`iat`、`exp`、`jti`；部门成员增加可选 `team_keys`。
+- PDCA 服务令牌必须包含：`iss`、`aud`、`sub`、`user_id`、`role`、`scope`、`dealer_ids`、`iat`、`exp`、`jti`；部门成员增加可选 `team_keys`。专用全库只读账号可增加 `capabilities=["knowledge:read:all"]`，但必须同时为 `viewer`、`scope=none` 且不携带经销商或团队范围。
 - 令牌有效期不超过 5 分钟。知识库校验签名、受众、过期时间，并把 `dealer_ids` 作为上限再次授权。
 - 资产登记和原件导出携带 `Idempotency-Key`，每个请求携带 `X-Request-ID`。
 - 列表当前最多返回 100 项；错误返回稳定 `code`、安全 `message` 和 `request_id`，不得返回密钥、SQL 或原始敏感内容。
@@ -113,6 +113,7 @@
 
 服务端必须对路径对象、请求体中的资料范围和检索结果分别校验，不能依赖前端隐藏按钮。
 查询自动合并授权经销商资料、调用者 `team_keys` 对应部门资料和公司公用资料。
+`knowledge:read:all` 只扩展读取范围，不授予上传、主表修改、审核或原件导出权限。
 
 ## 状态与分类
 
